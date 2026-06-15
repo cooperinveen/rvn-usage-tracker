@@ -119,17 +119,9 @@ def upload():
     except Exception as e:
         return jsonify({'error': f'Could not parse file: {str(e)}'}), 500
 
-    return jsonify({
-        'summary': data['summary'],
-        'stories': data['stories'],
-        'channels': data['channels'],
-        'top_channels': data['top_channels'],
-        'top_markets': data['top_markets'],
-        'date_range': data['date_range'],
-        'trend_labels': data['trend_labels'],
-        'trend_unit': data['trend_unit'],
-        'day_context': data.get('day_context', {}),
-    })
+    # parse_file returns {'full': {...}, 'ex_us': {...|None}} — pass straight
+    # through; the client stores both and the toggle swaps which is live.
+    return jsonify(data)
 
 
 @app.route('/api/process', methods=['POST'])
@@ -191,17 +183,9 @@ def process_blob():
             except Exception:
                 pass
 
-    return jsonify({
-        'summary': data['summary'],
-        'stories': data['stories'],
-        'channels': data['channels'],
-        'top_channels': data['top_channels'],
-        'top_markets': data['top_markets'],
-        'date_range': data['date_range'],
-        'trend_labels': data['trend_labels'],
-        'trend_unit': data['trend_unit'],
-        'day_context': data.get('day_context', {}),
-    })
+    # parse_file returns {'full': {...}, 'ex_us': {...|None}} — pass straight
+    # through; the client stores both and the toggle swaps which is live.
+    return jsonify(data)
 
 
 @app.route('/api/export', methods=['POST'])
