@@ -315,6 +315,35 @@ def parse_file(file_bytes, filename):
         return non_empty.mode().iloc[0] if len(non_empty) else 'Unknown'
     channel_country_map = df.groupby('_channel')['_channel_country'].apply(_channel_home_country).to_dict()
 
+    # Run the aggregation twice on the same rows: once for everything, once with
+    # USA-home channels removed. USA channels are ~76% of channels / ~42% of
+    # airings in a typical export, so editors want an "ex-US" lens to see whether
+    # content has international legs. Both datasets ride in one response (no second
+    # upload, no server state) and the toggle just swaps which one is live.
+    # The trend axis, channel→country map and dataset window are computed once
+    # above and shared, so the two views stay directly comparable.
+    shared = dict(
+        trend_edges=trend_edges, trend_labels=trend_labels, trend_unit=trend_unit,
+        dataset_end=dataset_end, channel_country_map=channel_country_map,
+        date_range=date_range,
+    )
+    full = _aggregate(df, **shared)
+    df_ex = df[df['_channel_country'] != 'United States']
+    # ex_us is None when there are no US channels to remove — frontend hides the
+    # toggle in that case rather than offering an identical view.
+    ex_us = _aggregate(df_ex, **shared) if 0 < len(df_ex) < len(df) else None
+    return {'full': full, 'ex_us': ex_us}
+
+
+def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,
+               channel_country_map, date_range):
+    """Aggregate a (possibly filtered) dataframe into the dashboard payload.
+
+    Called once with the full dataframe and once with USA-home channels removed.
+    `df` must already carry the normalised `_*` columns from parse_file; the
+    trend axis / dataset window / channel-country map are passed in so both
+    passes share an identical, comparable basis.
+    """
     # --- Aggregate per story ---
     stories = []
     grouped = df.groupby('_slug', sort=False)

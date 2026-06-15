@@ -250,6 +250,55 @@ body {
     border-bottom-color: var(--tr-orange);
 }
 
+/* Exclude-US toggle — sits at the right of the view-tabs row. Compact switch. */
+.us-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;        /* push to the far right of the flex row */
+    margin-bottom: 4px;
+    padding: 0 2px;
+    cursor: pointer;
+    user-select: none;
+    align-self: center;
+}
+.us-toggle[hidden] { display: none; }
+.us-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.us-toggle-track {
+    position: relative;
+    width: 34px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--tr-border);
+    transition: background 0.15s;
+    flex: none;
+}
+.us-toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--tr-white);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s;
+}
+.us-toggle input:checked + .us-toggle-track { background: var(--tr-orange); }
+.us-toggle input:checked + .us-toggle-track .us-toggle-thumb { transform: translateX(16px); }
+.us-toggle input:focus-visible + .us-toggle-track { outline: 2px solid var(--tr-dark-sky); outline-offset: 2px; }
+.us-toggle-label {
+    font-family: 'Knowledge', 'Clario', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--tr-text-light);
+    transition: color 0.15s;
+}
+.us-toggle input:checked ~ .us-toggle-label { color: var(--tr-orange); }
+.us-toggle:hover .us-toggle-label { color: var(--tr-racing-green); }
+
 .search-filter-bar { margin-bottom: 12px; }
 .search-wrap {
     position: relative;

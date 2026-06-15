@@ -18,6 +18,8 @@ const state = {
     topChannels: [],
     topMarkets: [],
     dateRange: {},
+    datasets: { full: null, ex_us: null },  // both views from one upload; toggle swaps which is live
+    excludeUS: false,
 };
 
 // ── DOM refs ────────────────────────────────────────────────────────────────
@@ -97,9 +99,14 @@ async function uploadFile(file) {
             return;
         }
 
-        loadData(data);
+        state.datasets = { full: data.full, ex_us: data.ex_us };
+        state.excludeUS = false;
+        const usToggleInput = $('us-toggle-input');
+        if (usToggleInput) usToggleInput.checked = false;
+        loadData(data.full);
         showDashboard();
-        showToast(`Loaded ${data.summary.total_stories.toLocaleString()} stories from ${data.summary.total_airings.toLocaleString()} airings`);
+        const sum = data.full.summary;
+        showToast(`Loaded ${sum.total_stories.toLocaleString()} stories from ${sum.total_airings.toLocaleString()} airings`);
     } catch (err) {
         hideLoading();
         showUploadError(err.message || 'Could not connect to the server. Please try again.');
@@ -189,6 +196,8 @@ function showDashboard() {
     uploadScreen.style.display = 'none';
     dashboardScreen.style.display = 'block';
     headerStatus.style.display = 'flex';
+    // Only offer the ex-US lens when there are US channels to remove.
+    $('us-toggle').hidden = !state.datasets.ex_us;
     renderSummaryBar();
     renderInsights();
     applyFilters();
@@ -293,6 +302,22 @@ function setActiveView(view) {
 
 document.querySelectorAll('.view-tab').forEach(tab => {
     tab.addEventListener('click', () => setActiveView(tab.dataset.view));
+});
+
+// Exclude-US toggle: swap the live dataset between the full and ex-US
+// aggregations the backend returned. loadData() repoints every state field the
+// renders, modals and exports read from, so the whole dashboard follows.
+$('us-toggle-input').addEventListener('change', (e) => {
+    const useExUS = e.target.checked;
+    const ds = useExUS ? state.datasets.ex_us : state.datasets.full;
+    if (!ds) return;
+    state.excludeUS = useExUS;
+    const keepView = state.view;   // don't bounce the user back to Stories
+    loadData(ds);
+    setActiveView(keepView);
+    renderSummaryBar();
+    renderInsights();
+    showToast(useExUS ? 'US channels excluded' : 'Showing all channels');
 });
 
 // ── Filtering & Search ───────────────────────────────────────────────────────
