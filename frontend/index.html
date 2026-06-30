@@ -51,6 +51,16 @@
                 </div>
             </div>
 
+            <div class="asset-slot" id="asset-slot">
+                <label class="asset-slot-label" for="asset-file-input">
+                    <span class="asset-slot-add" id="asset-slot-add">+ Add Asset export (optional)</span>
+                    <span class="asset-slot-chosen" id="asset-slot-chosen" style="display:none"></span>
+                </label>
+                <input type="file" id="asset-file-input" accept=".csv,.xlsx" style="display:none">
+                <button type="button" class="asset-slot-clear" id="asset-slot-clear" style="display:none" aria-label="Remove asset file">✕</button>
+                <p class="asset-slot-hint">Enables <strong>zero-use</strong> detection — stories published but aired nowhere. Add it first, then choose your detections export to start. Export both from the same window for the most accurate result.</p>
+            </div>
+
             <div id="upload-progress" style="display:none">
                 <div class="progress-bar-wrap">
                     <div class="progress-bar" id="progress-bar"></div>
@@ -123,6 +133,12 @@
                     <span class="us-toggle-track"><span class="us-toggle-thumb"></span></span>
                     <span class="us-toggle-label">Exclude US channels</span>
                 </label>
+            </div>
+
+            <div class="zero-use-warning" id="zero-use-warning" style="display:none" role="status">
+                <span class="zero-use-warning-icon" aria-hidden="true">⚠</span>
+                <span class="zero-use-warning-text" id="zero-use-warning-text"></span>
+                <button type="button" class="zero-use-warning-dismiss" id="zero-use-warning-dismiss" aria-label="Dismiss">✕</button>
             </div>
 
             <!-- Search + Filters -->

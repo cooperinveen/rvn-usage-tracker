@@ -70,6 +70,43 @@ function handleFile(file) {
     uploadFile(file);
 }
 
+// Optional second file: a Teletrax Asset export, staged before the detections
+// file so choosing detections kicks off a combined upload. Null when not used.
+let stagedAssetFile = null;
+const assetFileInput = $('asset-file-input');
+const assetSlotAdd = $('asset-slot-add');
+const assetSlotChosen = $('asset-slot-chosen');
+const assetSlotClear = $('asset-slot-clear');
+
+if (assetFileInput) {
+    assetFileInput.addEventListener('change', () => {
+        const f = assetFileInput.files[0];
+        if (!f) return;
+        const name = f.name.toLowerCase();
+        if (!name.endsWith('.csv') && !name.endsWith('.xlsx')) {
+            showUploadError('The Asset export must be a .csv or .xlsx file from Teletrax.');
+            assetFileInput.value = '';
+            return;
+        }
+        hideUploadError();
+        stagedAssetFile = f;
+        assetSlotChosen.textContent = f.name;
+        assetSlotChosen.style.display = '';
+        assetSlotAdd.style.display = 'none';
+        assetSlotClear.style.display = '';
+    });
+}
+if (assetSlotClear) {
+    assetSlotClear.addEventListener('click', (e) => {
+        e.preventDefault();
+        stagedAssetFile = null;
+        if (assetFileInput) assetFileInput.value = '';
+        assetSlotChosen.style.display = 'none';
+        assetSlotAdd.style.display = '';
+        assetSlotClear.style.display = 'none';
+    });
+}
+
 async function uploadFile(file) {
     hideUploadError();
     showLoading('Uploading…', 'Sending file to server');
@@ -81,15 +118,27 @@ async function uploadFile(file) {
         showLoadingRing(0);
         const blobResult = await uploadToBlob(file);
 
+        // Optional: upload the staged Asset export too (small file, uploaded after
+        // the main one so the progress ring tracks the larger detections file).
+        let assetBlob = null;
+        if (stagedAssetFile) {
+            assetBlob = await uploadToBlob(stagedAssetFile);
+        }
+
         // Step 2: ask Flask to fetch from blob, parse, and return aggregated data.
         // No measurable progress here (single request, whole-response wait), so
         // fall back to the indeterminate spinner rather than fake a percentage.
         showLoading('Analysing your data…', 'Processing — this may take a moment for large files');
         showLoadingSpinner();
+        const payload = { url: blobResult.url, filename: file.name };
+        if (assetBlob) {
+            payload.asset_url = assetBlob.url;
+            payload.asset_filename = stagedAssetFile.name;
+        }
         const res = await fetch('/api/process', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: blobResult.url, filename: file.name }),
+            body: JSON.stringify(payload),
         });
         const data = await res.json();
 
@@ -106,7 +155,9 @@ async function uploadFile(file) {
         loadData(data.full);
         showDashboard();
         const sum = data.full.summary;
-        showToast(`Loaded ${sum.total_stories.toLocaleString()} stories from ${sum.total_airings.toLocaleString()} airings`);
+        const zu = sum.zero_use_stories || 0;
+        const zuNote = zu ? ` · ${zu.toLocaleString()} zero-use` : '';
+        showToast(`Loaded ${sum.total_stories.toLocaleString()} stories from ${sum.total_airings.toLocaleString()} airings${zuNote}`);
     } catch (err) {
         hideLoading();
         showUploadError(err.message || 'Could not connect to the server. Please try again.');
@@ -180,6 +231,7 @@ function loadData(data) {
     state.trendLabels = data.trend_labels || [];
     state.trendUnit = data.trend_unit || 'day';
     state.dayContext = data.day_context || {};
+    state.zeroUseWarning = data.zero_use_warning || null;
     state.currentPage = 1;
     state.chCurrentPage = 1;
     state.searchQuery = '';
@@ -200,7 +252,28 @@ function showDashboard() {
     $('us-toggle').hidden = !state.datasets.ex_us;
     renderSummaryBar();
     renderInsights();
+    renderZeroUseWarning();
     applyFilters();
+}
+
+// Persistent (not auto-dismissing) notice shown when the Asset and Detections
+// exports cover different windows, so the zero-use list may be incomplete.
+function renderZeroUseWarning() {
+    const box = $('zero-use-warning');
+    if (!box) return;
+    if (state.zeroUseWarning) {
+        $('zero-use-warning-text').textContent = state.zeroUseWarning;
+        box.style.display = '';
+    } else {
+        box.style.display = 'none';
+    }
+}
+const zuDismiss = $('zero-use-warning-dismiss');
+if (zuDismiss) {
+    zuDismiss.addEventListener('click', () => {
+        const box = $('zero-use-warning');
+        if (box) box.style.display = 'none';
+    });
 }
 
 function showUploadScreen() {
@@ -422,9 +495,9 @@ function renderTable() {
         const sparkline = renderSparkline(s.trend, state.trendLabels, state.trendUnit);
         const publishDisplay = s.publish_time ? escHtml(s.publish_time) : '<span class="muted">—</span>';
         return `
-        <tr class="story-row" data-story-id="${escHtml(s.story_id || s.slug)}" tabindex="0">
+        <tr class="story-row${s.zero_use ? ' zero-use-row' : ''}" data-story-id="${escHtml(s.story_id || s.slug)}" tabindex="0">
             <td class="slug-cell">
-                <div class="slug-main">${escHtml(displaySlug(s))}</div>
+                <div class="slug-main">${escHtml(displaySlug(s))}${s.zero_use ? ' <span class="zero-use-tag" title="Published but detected on no monitored channel">zero-use</span>' : ''}</div>
                 ${s.headline ? `<div class="slug-headline">${escHtml(s.headline)}</div>` : ''}
             </td>
             <td class="col-num">${s.channels}</td>

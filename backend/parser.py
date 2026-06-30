@@ -21,6 +21,7 @@ COL_ALIASES = {
     'actual_length': ['Actual detection length', 'hitActualDetectionLength'],
     'asset_length': ['Asset: Length', 'assetLength'],
     'activation_date': ['Asset: Activation date start (UTC)', 'assetActivationDateStartUtc'],
+    'service': ['Service', 'Asset: Service'],
 }
 
 # Below this many airings, a channel's measured story-origin diversity is mostly
@@ -296,6 +297,16 @@ def parse_file(file_bytes, filename):
     }
     dataset_end = valid_dates.max() if len(valid_dates) else None
 
+    # Activation window of the detections set — the span of asset-activation dates
+    # this export actually covers. Used to bound zero-use detection: an asset is
+    # only judged "zero-use" if it was activated inside this window, otherwise it's
+    # too recent/old to compare fairly against these detections. min/max as tz-aware
+    # Timestamps (or None when the column is absent).
+    valid_activations = df['_activation'].dropna() if '_activation' in df.columns else pd.Series([], dtype='datetime64[ns, UTC]')
+    activation_window = (
+        (valid_activations.min(), valid_activations.max()) if len(valid_activations) else (None, None)
+    )
+
     # Trend bin edges shared across all stories so sparklines are comparable.
     # <24h → hourly bins (up to 24); ≥24h → daily bins capped at 14.
     trend_edges = []
@@ -338,7 +349,153 @@ def parse_file(file_bytes, filename):
     # ex_us is None when there are no US channels to remove — frontend hides the
     # toggle in that case rather than offering an identical view.
     ex_us = _aggregate(df_ex, **shared) if 0 < len(df_ex) < len(df) else None
-    return {'full': full, 'ex_us': ex_us}
+    # activation_window rides alongside so the route can join an Asset export
+    # (zero-use detection) without re-parsing the detections file.
+    return {'full': full, 'ex_us': ex_us, 'activation_window': activation_window}
+
+
+def parse_asset_file(file_bytes, filename):
+    """Parse a Teletrax *Asset* export — the registry of published stories,
+    regardless of whether they aired. Used only as the denominator for zero-use
+    detection (joined against a detections export on Story ID). We keep this
+    deliberately light: one record per distinct Story ID with just what a
+    zero-use story row needs.
+
+    Returns {'assets': [{story_id, slug, headline, asset_secs, activation_ts}],
+             'activation_window': (min_ts, max_ts)}  (tz-aware Timestamps or None).
+    """
+    if filename.lower().endswith('.xlsx'):
+        df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0)
+    else:
+        for sep in [',', '|', '\t']:
+            try:
+                df = pd.read_csv(io.BytesIO(file_bytes), sep=sep, skiprows=_detect_header_rows(file_bytes))
+                if len(df.columns) > 3:
+                    break
+            except Exception:
+                continue
+
+    col = _resolve_columns(df)
+    if 'story_id' not in col:
+        raise ValueError("Could not find a Story ID column in this file. Please check it is a Teletrax Asset export.")
+
+    df['_story_id'] = df[col['story_id']].fillna('').astype(str).str.strip()
+    # Drop the footer/total rows (blank Story ID) the same way the detections path does.
+    df = df[df['_story_id'] != '']
+
+    df['_slug'] = df[col['slug']].fillna('').astype(str).str.strip() if 'slug' in col else ''
+    df['_headline'] = df[col['headline']].fillna('').astype(str).str.strip() if 'headline' in col else ''
+    df['_asset_secs'] = df[col['asset_length']].apply(_td_to_seconds) if 'asset_length' in col else 0
+    df['_activation'] = (
+        pd.to_datetime(df[col['activation_date']], errors='coerce', utc=True)
+        if 'activation_date' in col else pd.NaT
+    )
+
+    # One record per Story ID. The asset export carries multiple rows per story
+    # (encodations/renditions); collapse to the earliest activation + first
+    # non-empty slug/headline + max asset length.
+    assets = []
+    for sid, grp in df.groupby('_story_id', sort=False):
+        slug_series = grp['_slug'][grp['_slug'] != '']
+        head_series = grp['_headline'][grp['_headline'] != '']
+        act = grp['_activation'].dropna()
+        assets.append({
+            'story_id': sid,
+            'slug': slug_series.iloc[0] if len(slug_series) else sid,
+            'headline': head_series.iloc[0] if len(head_series) else '',
+            'asset_secs': int(grp['_asset_secs'].max()) if '_asset_secs' in grp else 0,
+            'activation_ts': act.min() if len(act) else None,
+        })
+
+    valid_act = df['_activation'].dropna()
+    activation_window = (valid_act.min(), valid_act.max()) if len(valid_act) else (None, None)
+    return {'assets': assets, 'activation_window': activation_window}
+
+
+def compute_zero_use(det_stories, det_activation_window, asset_data, trend_len=0):
+    """Join an Asset export against a detections result on Story ID and build
+    zero-use story rows: assets that were published but detected on no channel.
+
+    Window-constrained: an asset is only judged zero-use if its activation falls
+    inside the detections export's activation window. Assets activated after the
+    window closed are too recent to judge (they may simply not have aired *yet*),
+    so they're excluded and counted separately.
+
+    Returns {'zero_use': [story_dict, ...], 'excluded_recent': int,
+             'warning': str|None}. Each story_dict matches the normal per-story
+    shape with all airing/channel/country metrics zeroed and zero_use=True, so it
+    renders through the existing table/modal/export untouched.
+    """
+    det_ids = {s['story_id'] for s in det_stories if s.get('story_id')}
+    det_min, det_max = det_activation_window if det_activation_window else (None, None)
+
+    zero_use = []
+    excluded_recent = 0
+    for a in asset_data['assets']:
+        if a['story_id'] in det_ids:
+            continue  # it aired — not zero-use
+        act = a['activation_ts']
+        # Window bound: must have been activated within the detections window to
+        # be comparable. Outside it (esp. after det_max) → too recent/old to judge.
+        if det_min is not None and det_max is not None and act is not None:
+            if act < det_min or act > det_max:
+                excluded_recent += 1
+                continue
+        elif act is None:
+            # No activation date and no window to test against — skip rather than
+            # guess; better to under-report zero-use than fabricate it.
+            excluded_recent += 1
+            continue
+
+        slug = a['slug']
+        zero_use.append({
+            'slug': slug,
+            'headline': a['headline'],
+            'story_id': a['story_id'],
+            'airings': 0,
+            'channels': 0,
+            'countries': 0,
+            'total_air_time': '0s',
+            'total_air_secs': 0,
+            'avg_clip': '0s',
+            'avg_clip_secs': 0,
+            'asset_length': _seconds_to_hms(a['asset_secs']) if a['asset_secs'] else '',
+            'asset_secs': int(a['asset_secs']),
+            'first_seen': '',
+            'last_seen': '',
+            'days_in_rotation': 0,
+            'all_channels': [],
+            'all_markets': [],
+            'regions': {r: 1 for r in _region_from_slug(slug)},
+            'trend': [0] * trend_len,
+            'longevity': None,
+            'publish_time': act.strftime('%d %b %Y %H:%M') if act is not None else '',
+            'publish_ts': int(act.timestamp()) if act is not None else None,
+            'publish_day': act.strftime('%Y-%m-%d') if act is not None else None,
+            'family': _slug_family(slug),
+            'reach': 0,
+            'reach_channels': 0,
+            'reach_countries': 0,
+            'zero_use': True,
+        })
+
+    # Window-mismatch warning: the two exports should cover the same activation
+    # window. If the asset export reaches materially past the detections window
+    # (>1h, the timing-gap case), warn — those later assets can't be judged.
+    warning = None
+    asset_min, asset_max = asset_data['activation_window']
+    if det_max is not None and asset_max is not None:
+        gap_hours = (asset_max - det_max).total_seconds() / 3600
+        if gap_hours > 1 and excluded_recent > 0:
+            warning = (
+                f"The Asset and Detections exports don't cover the same window — "
+                f"the Asset export runs ~{round(gap_hours)}h later. "
+                f"{excluded_recent} recently-activated stor"
+                f"{'y was' if excluded_recent == 1 else 'ies were'} excluded as too "
+                f"new to judge. For the most accurate zero-use list, export both "
+                f"files at the same time."
+            )
+    return {'zero_use': zero_use, 'excluded_recent': excluded_recent, 'warning': warning}
 
 
 def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,

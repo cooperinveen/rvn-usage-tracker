@@ -153,6 +153,38 @@ body {
 .upload-zone-sub { font-size: 14px; color: var(--tr-text-light); margin: 0 0 16px; }
 .upload-zone-formats { font-size: 12px; color: var(--tr-text-light); margin: 12px 0 0; }
 
+/* Optional Asset-export slot (enables zero-use detection) */
+.asset-slot { text-align: center; margin: -8px 0 24px; }
+.asset-slot-label { cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.asset-slot-add { font-size: 13px; font-weight: 600; color: var(--tr-racing-green); border-bottom: 1px dashed currentColor; padding-bottom: 1px; }
+.asset-slot-add:hover { color: var(--tr-orange); }
+.asset-slot-chosen { font-size: 13px; font-weight: 600; color: var(--tr-orange); }
+.asset-slot-clear { background: none; border: none; cursor: pointer; color: var(--tr-text-light); font-size: 13px; line-height: 1; padding: 2px 6px; }
+.asset-slot-clear:hover { color: var(--tr-orange); }
+.asset-slot-hint { font-size: 12px; color: var(--tr-text-light); margin: 8px auto 0; max-width: 460px; line-height: 1.45; }
+
+/* Window-mismatch warning banner (persistent, dismissible) */
+.zero-use-warning {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: #fff4ec; border: 1px solid var(--tr-orange);
+    border-radius: var(--radius); padding: 12px 14px; margin: 0 0 16px;
+    font-size: 13px; line-height: 1.45; color: var(--tr-text);
+}
+.zero-use-warning-icon { color: var(--tr-orange); font-size: 15px; line-height: 1.3; flex-shrink: 0; }
+.zero-use-warning-text { flex: 1; }
+.zero-use-warning-dismiss { background: none; border: none; cursor: pointer; color: var(--tr-text-light); font-size: 14px; line-height: 1; padding: 0 2px; flex-shrink: 0; }
+.zero-use-warning-dismiss:hover { color: var(--tr-orange); }
+
+/* Zero-use story rows + inline tag */
+.zero-use-row { background: rgba(214,64,0,0.03); }
+.zero-use-row .col-num { color: var(--tr-text-light); }
+.zero-use-tag {
+    display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; color: var(--tr-orange); background: #fff4ec;
+    border: 1px solid var(--tr-orange); border-radius: 3px; padding: 1px 4px;
+    margin-left: 6px; vertical-align: middle; letter-spacing: 0.3px;
+}
+
 .progress-bar-wrap { background: var(--tr-border); border-radius: 2px; height: 6px; margin: 16px 0 8px; overflow: hidden; }
 .progress-bar { height: 100%; background: var(--tr-racing-green); border-radius: 2px; width: 0%; transition: width 0.4s ease; }
 .progress-text { font-size: 14px; color: var(--tr-text-light); margin: 0; }

@@ -4,7 +4,7 @@ import urllib.request
 from functools import wraps
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, Response, session, redirect
-from backend.parser import parse_file, generate_export, generate_top_export
+from backend.parser import parse_file, parse_asset_file, compute_zero_use, generate_export, generate_top_export
 
 FRONTEND_DIR = str(Path(__file__).parent.parent / 'frontend')
 
@@ -121,71 +121,126 @@ def upload():
 
     # parse_file returns {'full': {...}, 'ex_us': {...|None}} — pass straight
     # through; the client stores both and the toggle swaps which is live.
+    # activation_window is internal (tz-aware Timestamps, not JSON-safe) — drop it.
+    data.pop('activation_window', None)
     return jsonify(data)
+
+
+def _blob_url_ok(blob_url):
+    """Validate a Vercel Blob URL — HTTPS, our public store host, no creds."""
+    ALLOWED_BLOB_SUFFIX = '.public.blob.vercel-storage.com'
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(blob_url)
+        hostname = parsed.hostname or ''
+        return (
+            parsed.scheme == 'https'
+            and hostname
+            and '%' not in hostname
+            and '@' not in blob_url.split('//')[1].split('/')[0]
+            and hostname.endswith(ALLOWED_BLOB_SUFFIX)
+        )
+    except Exception:
+        return False
+
+
+def _fetch_blob(blob_url):
+    """Fetch blob bytes. Raises on network error."""
+    req = urllib.request.Request(blob_url)
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return resp.read()
+
+
+def _delete_blob(blob_url):
+    """Best-effort delete of a processed blob — never raises."""
+    blob_token = os.environ.get('BLOB_READ_WRITE_TOKEN', '')
+    if blob_url and blob_token:
+        try:
+            del_req = urllib.request.Request(
+                blob_url, method='DELETE',
+                headers={'Authorization': f'Bearer {blob_token}'}
+            )
+            urllib.request.urlopen(del_req, timeout=10)
+        except Exception:
+            pass
 
 
 @app.route('/api/process', methods=['POST'])
 @login_required
 def process_blob():
-    """Process a file already uploaded to Vercel Blob. Receives the blob URL, fetches, parses, deletes."""
+    """Process a detections file already uploaded to Vercel Blob (fetch, parse,
+    delete). Optionally also takes an Asset export (asset_url/asset_filename) and
+    merges window-constrained zero-use stories into both datasets."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Invalid request body'}), 400
 
     blob_url = body.get('url', '').strip()
     filename = body.get('filename', 'upload.xlsx').strip()
+    asset_url = body.get('asset_url', '').strip()
+    asset_filename = body.get('asset_filename', 'asset.xlsx').strip()
 
     if not blob_url:
         return jsonify({'error': 'No blob URL provided'}), 400
-
-    ALLOWED_BLOB_SUFFIX = '.public.blob.vercel-storage.com'
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(blob_url)
-        hostname = parsed.hostname or ''
-        if (
-            parsed.scheme != 'https'
-            or not hostname
-            or '%' in hostname
-            or '@' in blob_url.split('//')[1].split('/')[0]
-            or not hostname.endswith(ALLOWED_BLOB_SUFFIX)
-        ):
-            return jsonify({'error': 'Invalid file URL'}), 400
-    except Exception:
+    if not _blob_url_ok(blob_url):
         return jsonify({'error': 'Invalid file URL'}), 400
+    if asset_url and not _blob_url_ok(asset_url):
+        return jsonify({'error': 'Invalid asset file URL'}), 400
 
     try:
-        req = urllib.request.Request(blob_url)
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            file_bytes = resp.read()
+        file_bytes = _fetch_blob(blob_url)
     except Exception as e:
         return jsonify({'error': f'Could not fetch uploaded file: {str(e)}'}), 500
-
     if len(file_bytes) == 0:
         return jsonify({'error': 'The uploaded file is empty'}), 400
 
+    asset_bytes = None
+    if asset_url:
+        try:
+            asset_bytes = _fetch_blob(asset_url)
+        except Exception as e:
+            return jsonify({'error': f'Could not fetch asset file: {str(e)}'}), 500
+
     try:
         data = parse_file(file_bytes, filename)
+        if asset_bytes:
+            _merge_zero_use(data, asset_bytes, asset_filename)
     except ValueError as e:
         return jsonify({'error': str(e)}), 422
     except Exception as e:
         return jsonify({'error': f'Could not parse file: {str(e)}'}), 500
     finally:
-        blob_token = os.environ.get('BLOB_READ_WRITE_TOKEN', '')
-        if blob_url and blob_token:
-            try:
-                del_req = urllib.request.Request(
-                    blob_url,
-                    method='DELETE',
-                    headers={'Authorization': f'Bearer {blob_token}'}
-                )
-                urllib.request.urlopen(del_req, timeout=10)
-            except Exception:
-                pass
+        _delete_blob(blob_url)
+        if asset_url:
+            _delete_blob(asset_url)
 
-    # parse_file returns {'full': {...}, 'ex_us': {...|None}} — pass straight
-    # through; the client stores both and the toggle swaps which is live.
+    # activation_window is internal (tz-aware Timestamps, not JSON-safe) — drop it.
+    data.pop('activation_window', None)
     return jsonify(data)
+
+
+def _merge_zero_use(data, asset_bytes, asset_filename):
+    """Compute zero-use stories from an Asset export and merge them into both the
+    full and ex_us datasets in-place. Zero-use rows are channel-agnostic, so the
+    same set applies to both. Appended AFTER aggregation/reach so they don't
+    dilute real stories' reach percentiles."""
+    asset_data = parse_asset_file(asset_bytes, asset_filename)
+    det_window = data.get('activation_window')
+    full = data['full']
+    trend_len = len(full.get('trend_labels') or [])
+    result = compute_zero_use(full['stories'], det_window, asset_data, trend_len=trend_len)
+    zero_use = result['zero_use']
+
+    for ds in (data.get('full'), data.get('ex_us')):
+        if not ds:
+            continue
+        # Fresh copies per dataset — they're sorted independently downstream.
+        ds['stories'] = ds['stories'] + [dict(z) for z in zero_use]
+        ds['stories'].sort(key=lambda x: x['airings'], reverse=True)
+        ds['summary']['total_stories'] = int(ds['summary']['total_stories']) + len(zero_use)
+        ds['summary']['zero_use_stories'] = len(zero_use)
+        ds['zero_use_warning'] = result['warning']
+        ds['zero_use_excluded'] = result['excluded_recent']
 
 
 @app.route('/api/export', methods=['POST'])
