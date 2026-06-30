@@ -242,7 +242,7 @@ function renderInsights() {
     const maxAirings = topStories[0]?.airings || 1;
 
     $('top-stories-list').innerHTML = topStories.map((s, i) => `
-        <div class="insight-item" data-slug="${escHtml(s.slug)}">
+        <div class="insight-item" data-story-id="${escHtml(s.story_id || s.slug)}">
             <span class="insight-rank">${i + 1}</span>
             <div style="flex:1; min-width:0">
                 <div class="insight-name">${slugDisplay(s)}</div>
@@ -422,7 +422,7 @@ function renderTable() {
         const sparkline = renderSparkline(s.trend, state.trendLabels, state.trendUnit);
         const publishDisplay = s.publish_time ? escHtml(s.publish_time) : '<span class="muted">—</span>';
         return `
-        <tr class="story-row" data-slug="${escHtml(s.slug)}" tabindex="0">
+        <tr class="story-row" data-story-id="${escHtml(s.story_id || s.slug)}" tabindex="0">
             <td class="slug-cell">
                 <div class="slug-main">${escHtml(displaySlug(s))}</div>
                 ${s.headline ? `<div class="slug-headline">${escHtml(s.headline)}</div>` : ''}
@@ -586,8 +586,11 @@ $('btn-next').addEventListener('click', () => {
 });
 
 // ── Story Detail Modal ────────────────────────────────────────────────────────
-function openStoryModal(slug) {
-    const story = state.allStories.find(s => s.slug === slug);
+function openStoryModal(id) {
+    // Identity is Story ID (slugs repeat across editions). Fall back to slug match
+    // for the rare blank-ID row, whose data-story-id carries the slug instead.
+    const story = state.allStories.find(s => s.story_id === id) ||
+                  state.allStories.find(s => s.slug === id);
     if (!story) return;
 
     modalSlug.textContent = displaySlug(story);
@@ -807,20 +810,20 @@ function renderModalPagination(elId, kind, page, pages, start, total, noun) {
 
 // Open modal via delegated listeners (avoids inline onclick, which CSP blocks)
 $('stories-tbody').addEventListener('click', e => {
-    const row = e.target.closest('tr[data-slug]');
+    const row = e.target.closest('tr[data-story-id]');
     if (!row) return;
     // Don't open the modal if the user was selecting text inside the row
     if (window.getSelection().toString().length > 0) return;
-    openStoryModal(row.dataset.slug);
+    openStoryModal(row.dataset.storyId);
 });
 $('stories-tbody').addEventListener('keydown', e => {
     if (e.key !== 'Enter') return;
-    const row = e.target.closest('tr[data-slug]');
-    if (row) openStoryModal(row.dataset.slug);
+    const row = e.target.closest('tr[data-story-id]');
+    if (row) openStoryModal(row.dataset.storyId);
 });
 $('top-stories-list').addEventListener('click', e => {
-    const item = e.target.closest('[data-slug]');
-    if (item) openStoryModal(item.dataset.slug);
+    const item = e.target.closest('[data-story-id]');
+    if (item) openStoryModal(item.dataset.storyId);
 });
 $('top-channels-list').addEventListener('click', e => {
     const item = e.target.closest('[data-channel]');

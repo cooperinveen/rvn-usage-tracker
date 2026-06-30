@@ -239,6 +239,12 @@ def parse_file(file_bytes, filename):
     slug_col = col.get('slug') or col.get('story_id')
     df['_slug'] = df[slug_col].fillna('Unknown').astype(str).str.strip()
     df['_story_id'] = df[col['story_id']].fillna('').astype(str).str.strip() if 'story_id' in col else ''
+    # Story identity = Story ID, NOT slug. Reuters reuses slugs daily (rule is only
+    # "not the same slug twice in 24h"), so one slug can cover up to ~7 distinct
+    # stories in a week, each with its own Story ID. Grouping by slug merged them
+    # into one inflated row. Fall back to slug only when Story ID is blank (malformed
+    # rows). Slug stays the display label (prefixed via _slug_with_prefix).
+    df['_story_key'] = df['_story_id'].where(df['_story_id'] != '', df['_slug'])
     df['_headline'] = df[col['headline']].fillna('').astype(str).str.strip() if 'headline' in col else ''
     df['_channel'] = df[col['channel']].fillna('Unknown').astype(str).str.strip()
     df['_market'] = df[col['market']].fillna('Unknown').astype(str).str.strip() if 'market' in col else 'Unknown'
@@ -346,9 +352,12 @@ def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,
     """
     # --- Aggregate per story ---
     stories = []
-    grouped = df.groupby('_slug', sort=False)
+    grouped = df.groupby('_story_key', sort=False)
 
-    for slug, grp in grouped:
+    for _story_key, grp in grouped:
+        # Display slug + story_id come off the group; one Story ID per group now,
+        # so these are unambiguous (no more earliest-edit-wins).
+        slug = grp['_slug'].iloc[0]
         story_id = grp['_story_id'].iloc[0] if '_story_id' in grp.columns else ''
         headline_series = grp['_headline'][grp['_headline'] != ''] if '_headline' in grp.columns else pd.Series([], dtype=str)
         headline = headline_series.iloc[0] if len(headline_series) else ''
@@ -490,7 +499,7 @@ def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,
     for chan, grp in ch_grouped:
         country = channel_country_map.get(chan, 'Unknown')
         ch_airings = len(grp)
-        ch_stories = grp['_slug'].nunique()
+        ch_stories = grp['_story_key'].nunique()
         ch_air_secs = grp['_actual_secs'].sum()
         ch_avg_secs = grp['_actual_secs'].mean()
 
@@ -499,15 +508,18 @@ def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,
         days_active = max(1, (last_seen - first_seen).days + 1) if pd.notna(first_seen) and pd.notna(last_seen) else 1
 
         # Stories aired on this channel — one row per slug, sorted by airings desc
-        s_agg = grp.groupby('_slug').agg(
+        # Group by story identity (Story ID), not slug — a channel that aired two
+        # same-slug editions should show two rows, each with its own slug + ID.
+        s_agg = grp.groupby('_story_key').agg(
             airings=('_actual_secs', 'count'),
             air_secs=('_actual_secs', 'sum'),
+            slug=('_slug', 'first'),
             story_id=('_story_id', 'first'),
             headline=('_headline', 'first'),
         ).reset_index().sort_values('airings', ascending=False)
         all_stories = s_agg.to_dict('records')
         for row in all_stories:
-            row['slug'] = row.pop('_slug')
+            del row['_story_key']
             row['air_time'] = _seconds_to_hms(row['air_secs'])
             del row['air_secs']
             # Pre-derive slug-based filtering fields so the client doesn't have
