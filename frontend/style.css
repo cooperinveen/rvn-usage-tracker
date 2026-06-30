@@ -175,15 +175,9 @@ body {
 .zero-use-warning-dismiss { background: none; border: none; cursor: pointer; color: var(--tr-text-light); font-size: 14px; line-height: 1; padding: 0 2px; flex-shrink: 0; }
 .zero-use-warning-dismiss:hover { color: var(--tr-orange); }
 
-/* Zero-use story rows + inline tag */
+/* Zero-use story rows — red tint flags them; no inline tag needed */
 .zero-use-row { background: rgba(214,64,0,0.03); }
 .zero-use-row .col-num { color: var(--tr-text-light); }
-.zero-use-tag {
-    display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.4px; color: var(--tr-orange); background: #fff4ec;
-    border: 1px solid var(--tr-orange); border-radius: 3px; padding: 1px 4px;
-    margin-left: 6px; vertical-align: middle; letter-spacing: 0.3px;
-}
 
 .progress-bar-wrap { background: var(--tr-border); border-radius: 2px; height: 6px; margin: 16px 0 8px; overflow: hidden; }
 .progress-bar { height: 100%; background: var(--tr-racing-green); border-radius: 2px; width: 0%; transition: width 0.4s ease; }

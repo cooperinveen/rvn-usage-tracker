@@ -497,7 +497,7 @@ function renderTable() {
         return `
         <tr class="story-row${s.zero_use ? ' zero-use-row' : ''}" data-story-id="${escHtml(s.story_id || s.slug)}" tabindex="0">
             <td class="slug-cell">
-                <div class="slug-main">${escHtml(displaySlug(s))}${s.zero_use ? ' <span class="zero-use-tag" title="Published but detected on no monitored channel">zero-use</span>' : ''}</div>
+                <div class="slug-main">${escHtml(displaySlug(s))}</div>
                 ${s.headline ? `<div class="slug-headline">${escHtml(s.headline)}</div>` : ''}
             </td>
             <td class="col-num">${s.channels}</td>
