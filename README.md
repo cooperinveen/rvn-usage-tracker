@@ -25,7 +25,7 @@ Upload a `.csv` or `.xlsx` export → get:
 - **Insights panel** — top 10 stories, channels, and countries at a glance. Click a top channel to open its detail modal.
 - **Export** — download the aggregated summary as a clean Excel file. Split-button picker lets you choose top 25 / 50 / 100 rows for whichever view is active.
 
-Stories are identified by the Reuters producer-style slug: first 4 digits of the story ID prepended to the slug (e.g. `5890-USA-SCREWWORM/`).
+Each row is one **Story ID**, not one slug. Reuters reuses slugs daily (the only rule is not the same slug twice in 24h), so a single slug can cover several distinct stories in a week — each is kept as its own row. Stories are labelled in the Reuters producer-style format: first 4 digits of the story ID prepended to the slug (e.g. `5890-USA-SCREWWORM/`), which also disambiguates same-slug editions on screen.
 
 Access is restricted to Thomson Reuters staff via Microsoft / Azure AD SSO.
 
