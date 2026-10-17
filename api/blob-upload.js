@@ -1,5 +1,19 @@
 import { handleUpload } from '@vercel/blob/client';
 
+async function isSignedIn(req) {
+    const cookie = req.headers.cookie;
+    if (!cookie) return false;
+    try {
+        const r = await fetch(`https://${req.headers.host}/api/me`, {
+            headers: { cookie },
+            redirect: 'manual',
+        });
+        return r.status === 200;
+    } catch {
+        return false;
+    }
+}
+
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
         res.status(405).json({ error: 'Method not allowed' });
@@ -16,6 +30,15 @@ export default async function handler(req, res) {
         });
         req.on('error', reject);
     });
+
+    // Require a signed-in user. This Node function can't read Flask's signed
+    // session cookie itself, so it forwards the cookie to Flask's /api/me
+    // (behind login_required) and only issues a token on a 200. Host is safe to
+    // use: Vercel only routes hosts attached to this project here.
+    if (!(await isSignedIn(req))) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+    }
 
     // Validate pathname before issuing a token — reject any path separators or non-CSV/XLSX names
     const pathname = body?.payload?.pathname || '';
