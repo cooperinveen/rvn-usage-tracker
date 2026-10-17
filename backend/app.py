@@ -1,4 +1,5 @@
 import os
+import json
 import secrets
 import urllib.request
 from functools import wraps
@@ -152,17 +153,28 @@ def _fetch_blob(blob_url):
 
 
 def _delete_blob(blob_url):
-    """Best-effort delete of a processed blob — never raises."""
+    """Best-effort delete of a processed blob — never raises.
+
+    The public *.blob.vercel-storage.com host is a read-only CDN, so a DELETE
+    sent there does nothing. Deletes go through the Blob API instead (same call
+    @vercel/blob's del() makes): POST /delete with {"urls": [...]}."""
     blob_token = os.environ.get('BLOB_READ_WRITE_TOKEN', '')
     if blob_url and blob_token:
         try:
             del_req = urllib.request.Request(
-                blob_url, method='DELETE',
-                headers={'Authorization': f'Bearer {blob_token}'}
+                'https://blob.vercel-storage.com/delete', method='POST',
+                data=json.dumps({'urls': [blob_url]}).encode(),
+                headers={
+                    'Authorization': f'Bearer {blob_token}',
+                    'Content-Type': 'application/json',
+                    'x-api-version': '9',
+                }
             )
             urllib.request.urlopen(del_req, timeout=10)
-        except Exception:
-            pass
+        except Exception as e:
+            # Log (not raise) so a failed cleanup is visible in Vercel logs
+            # instead of silently filling the store.
+            app.logger.warning('Blob delete failed for %s: %s', blob_url, e)
 
 
 @app.route('/api/process', methods=['POST'])
