@@ -57,8 +57,8 @@ export default async function handler(req, res) {
                     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 ],
                 maximumSizeInBytes: 50 * 1024 * 1024, // 50 MB — covers ~1 week XLSX exports; matches README promise
-                addRandomSuffix: false,
-                allowOverwrite: true,
+                addRandomSuffix: false, // the client already makes each name unique
+                allowOverwrite: false,
                 access: 'public',
             }),
             onUploadCompleted: async () => {},

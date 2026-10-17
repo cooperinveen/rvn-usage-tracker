@@ -199,28 +199,31 @@ def process_blob():
     if asset_url and not _blob_url_ok(asset_url):
         return jsonify({'error': 'Invalid asset file URL'}), 400
 
+    # Delete both blobs however this ends — a failed fetch or parse used to
+    # return early and leave the file in the store.
     try:
-        file_bytes = _fetch_blob(blob_url)
-    except Exception as e:
-        return jsonify({'error': f'Could not fetch uploaded file: {str(e)}'}), 500
-    if len(file_bytes) == 0:
-        return jsonify({'error': 'The uploaded file is empty'}), 400
-
-    asset_bytes = None
-    if asset_url:
         try:
-            asset_bytes = _fetch_blob(asset_url)
+            file_bytes = _fetch_blob(blob_url)
         except Exception as e:
-            return jsonify({'error': f'Could not fetch asset file: {str(e)}'}), 500
+            return jsonify({'error': f'Could not fetch uploaded file: {str(e)}'}), 500
+        if len(file_bytes) == 0:
+            return jsonify({'error': 'The uploaded file is empty'}), 400
 
-    try:
-        data = parse_file(file_bytes, filename)
-        if asset_bytes:
-            _merge_zero_use(data, asset_bytes, asset_filename)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 422
-    except Exception as e:
-        return jsonify({'error': f'Could not parse file: {str(e)}'}), 500
+        asset_bytes = None
+        if asset_url:
+            try:
+                asset_bytes = _fetch_blob(asset_url)
+            except Exception as e:
+                return jsonify({'error': f'Could not fetch asset file: {str(e)}'}), 500
+
+        try:
+            data = parse_file(file_bytes, filename)
+            if asset_bytes:
+                _merge_zero_use(data, asset_bytes, asset_filename)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 422
+        except Exception as e:
+            return jsonify({'error': f'Could not parse file: {str(e)}'}), 500
     finally:
         _delete_blob(blob_url)
         if asset_url:

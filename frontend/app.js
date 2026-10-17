@@ -56,7 +56,11 @@ uploadZone.addEventListener('drop', e => {
     const file = e.dataTransfer.files[0];
     if (file) handleFile(file);
 });
-uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('click', e => {
+    // The "Choose File" <label> already opens the picker natively — don't open it twice.
+    if (e.target.closest('label, input')) return;
+    fileInput.click();
+});
 fileInput.addEventListener('change', () => {
     if (fileInput.files[0]) handleFile(fileInput.files[0]);
 });
@@ -169,7 +173,11 @@ async function uploadToBlob(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     const basename = file.name.replace(/\.[^.]+$/, '');
     const safeBasename = basename.replace(/[^\w\-]/g, '_').replace(/_+/g, '_');
-    const pathname = safeBasename + '.' + ext;
+    // Unique name per upload: each blob is deleted after processing, and re-using
+    // the same name for the next upload of that file intermittently 404'd when
+    // the server fetched it. A fresh name means a URL that's never existed before.
+    const uniq = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const pathname = `${safeBasename}-${uniq}.${ext}`;
 
     // Step 1: get a client token from our server-side handler
     const callbackUrl = window.location.origin + '/api/blob-upload';
