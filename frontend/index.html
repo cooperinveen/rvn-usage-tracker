@@ -18,7 +18,17 @@
     <div class="header-right" id="header-status" style="display:none">
         <span class="data-badge" id="data-badge"></span>
         <button class="btn btn-outline btn-sm" id="btn-new-upload">New Upload</button>
-        <button class="btn btn-secondary btn-sm" id="btn-export">Export Summary</button>
+        <div class="summary-export">
+            <button class="btn btn-secondary btn-sm" id="btn-export" aria-haspopup="menu" aria-expanded="false" title="Download a one-page summary of this upload">
+                Download Summary
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="export-menu" id="summary-export-menu" hidden role="menu">
+                <button class="export-menu-item" data-format="png" role="menuitem">Image (PNG)</button>
+                <button class="export-menu-item" data-format="jpeg" role="menuitem">Image (JPEG)</button>
+                <button class="export-menu-item" data-format="pdf" role="menuitem">PDF</button>
+            </div>
+        </div>
     </div>
 </header>
 

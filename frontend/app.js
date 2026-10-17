@@ -1465,30 +1465,255 @@ chModalBody.addEventListener('click', e => {
     renderChannelModalStoryPage();
 });
 
-// ── Export ───────────────────────────────────────────────────────────────────
-$('btn-export').addEventListener('click', async () => {
-    try {
-        const res = await fetch('/api/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stories: state.allStories }),
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            showToast(err.error || 'Export failed');
-            return;
-        }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'reuters-usage-summary.xlsx';
-        a.click();
-        URL.revokeObjectURL(url);
-        showToast('Downloading summary…');
-    } catch (err) {
-        showToast('Export failed — please try again');
+// ── Download Summary (one-page briefing) ─────────────────────────────────────
+// Builds a fixed-width briefing card off-screen — headline numbers, plain-English
+// highlights, top 10 stories / channels / countries — captures it with
+// html2canvas, and saves it as PNG, JPEG or a single-page PDF. Follows whatever
+// dataset is live, so the Exclude-US toggle carries through.
+const SUMMARY_TOP_N = 10;
+
+function pct(part, whole) {
+    return whole ? Math.round((part / whole) * 100) : 0;
+}
+
+function truncate(str, n) {
+    if (!str) return '';
+    return str.length > n ? str.slice(0, n - 1).trimEnd() + '…' : str;
+}
+
+// Plain-English one-liners for the highlights box. Each is skipped when the
+// data to back it isn't there (e.g. no Asset export → no zero-use line).
+function summaryHighlights() {
+    const s = state.summary;
+    const aired = state.allStories.filter(st => !st.zero_use);
+    const out = [];
+
+    const top = aired.slice(0, SUMMARY_TOP_N);
+    const topAirings = top.reduce((n, st) => n + st.airings, 0);
+    if (aired.length > SUMMARY_TOP_N) {
+        out.push(`The top ${SUMMARY_TOP_N} stories made up <strong>${pct(topAirings, s.total_airings)}%</strong> of all airings.`);
     }
+
+    const widest = aired.reduce((best, st) => (!best || st.countries > best.countries ? st : best), null);
+    if (widest) {
+        out.push(`Widest reach: <strong>${escHtml(displaySlug(widest))}</strong> aired in ${widest.countries.toLocaleString()} countries on ${widest.channels.toLocaleString()} channels.`);
+    }
+
+    const full = state.datasets.full;
+    const exUs = state.datasets.ex_us;
+    if (state.excludeUS) {
+        out.push('US channels are <strong>excluded</strong> from every figure on this page.');
+    } else if (full && exUs) {
+        const usShare = pct(full.summary.total_airings - exUs.summary.total_airings, full.summary.total_airings);
+        out.push(`US channels accounted for <strong>${usShare}%</strong> of airings; ${100 - usShare}% came from outside the US.`);
+    }
+
+    const zu = s.zero_use_stories || 0;
+    if (zu) {
+        out.push(`<strong>${zu.toLocaleString()}</strong> published ${zu === 1 ? 'story wasn’t' : 'stories weren’t'} aired on any monitored channel.`);
+    }
+    return out;
+}
+
+function buildSummaryCard() {
+    const s = state.summary;
+    const stories = state.allStories.filter(st => !st.zero_use).slice(0, SUMMARY_TOP_N);
+    const channels = state.topChannels.slice(0, SUMMARY_TOP_N);
+    const markets = state.topMarkets.slice(0, SUMMARY_TOP_N);
+    const generated = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    const stat = (label, value) => `
+        <div class="sc-stat"><div class="sc-stat-value">${value}</div><div class="sc-stat-label">${label}</div></div>`;
+
+    const storyRows = stories.map((st, i) => `
+        <tr>
+            <td class="sc-rank">${i + 1}</td>
+            <td class="sc-name">
+                <div class="sc-slug">${escHtml(truncate(displaySlug(st), 48))}</div>
+                ${st.headline ? `<div class="sc-sub">${escHtml(truncate(st.headline, 70))}</div>` : ''}
+            </td>
+            <td class="sc-num">${st.airings.toLocaleString()}</td>
+            <td class="sc-num">${st.channels.toLocaleString()}</td>
+            <td class="sc-num">${st.countries.toLocaleString()}</td>
+        </tr>`).join('');
+
+    const channelRows = channels.map((c, i) => `
+        <tr>
+            <td class="sc-rank">${i + 1}</td>
+            <td class="sc-name">
+                <div class="sc-strong">${escHtml(truncate(c.channel, 34))}</div>
+                ${c.country ? `<div class="sc-sub">${escHtml(c.country)}</div>` : ''}
+            </td>
+            <td class="sc-num">${c.airings.toLocaleString()}</td>
+        </tr>`).join('');
+
+    const marketRows = markets.map((m, i) => `
+        <tr>
+            <td class="sc-rank">${i + 1}</td>
+            <td class="sc-name"><div class="sc-strong">${escHtml(m.market)}</div></td>
+            <td class="sc-num">${m.airings.toLocaleString()}</td>
+        </tr>`).join('');
+
+    const highlights = summaryHighlights();
+
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+    card.innerHTML = `
+        <div class="sc-header">
+            <img class="sc-logo" src="images/tr_pri_logo_rgb_color.png" alt="Thomson Reuters">
+            <div class="sc-title-wrap">
+                <div class="sc-title">RVN Usage Summary</div>
+                <div class="sc-range">${escHtml(state.dateRange.from)} – ${escHtml(state.dateRange.to)}${state.excludeUS ? ' · <span class="sc-chip">Excluding US channels</span>' : ''}</div>
+            </div>
+        </div>
+        <div class="sc-stats">
+            ${stat('Airings', s.total_airings.toLocaleString())}
+            ${stat('Stories', s.total_stories.toLocaleString())}
+            ${stat('Channels', s.total_channels.toLocaleString())}
+            ${stat('Countries', s.total_countries.toLocaleString())}
+            ${stat('Air time', escHtml(s.total_air_time))}
+        </div>
+        ${highlights.length ? `<ul class="sc-highlights">${highlights.map(h => `<li>${h}</li>`).join('')}</ul>` : ''}
+        <div class="sc-columns">
+            <div class="sc-col sc-col-wide">
+                <h3 class="sc-h">Top ${stories.length} stories</h3>
+                <table class="sc-table">
+                    <thead><tr><th class="sc-rank"></th><th>Story</th><th class="sc-num">Airings</th><th class="sc-num">Channels</th><th class="sc-num">Countries</th></tr></thead>
+                    <tbody>${storyRows}</tbody>
+                </table>
+            </div>
+            <div class="sc-col">
+                <h3 class="sc-h">Top ${channels.length} channels</h3>
+                <table class="sc-table">
+                    <thead><tr><th class="sc-rank"></th><th>Channel</th><th class="sc-num">Airings</th></tr></thead>
+                    <tbody>${channelRows}</tbody>
+                </table>
+                <h3 class="sc-h sc-h-gap">Top ${markets.length} countries</h3>
+                <table class="sc-table">
+                    <thead><tr><th class="sc-rank"></th><th>Country</th><th class="sc-num">Airings</th></tr></thead>
+                    <tbody>${marketRows}</tbody>
+                </table>
+            </div>
+        </div>
+        <div class="sc-footer">Teletrax detections · generated ${escHtml(generated)} by RVN Usage Tracker</div>`;
+    return card;
+}
+
+// Wrap one JPEG in a minimal single-page PDF. A JPEG can be embedded as-is
+// (DCTDecode), so no PDF library is needed — page size matches the image's
+// aspect ratio at a fixed 720pt width.
+function jpegToPdf(jpegBytes, widthPx, heightPx) {
+    const pageW = 720;
+    const pageH = Math.round(pageW * heightPx / widthPx);
+    const enc = new TextEncoder();
+    const content = `q ${pageW} 0 0 ${pageH} 0 0 cm /Im0 Do Q`;
+    const chunks = [];
+    const offsets = [];
+    let length = 0;
+    const push = part => {
+        const bytes = typeof part === 'string' ? enc.encode(part) : part;
+        chunks.push(bytes);
+        length += bytes.length;
+    };
+    const obj = (n, body) => { offsets[n] = length; push(`${n} 0 obj\n${body}\nendobj\n`); };
+
+    push('%PDF-1.4\n');
+    obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    obj(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+    obj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
+    offsets[4] = length;
+    push(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${widthPx} /Height ${heightPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`);
+    push(jpegBytes);
+    push('\nendstream\nendobj\n');
+    obj(5, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+
+    const xrefAt = length;
+    let xref = 'xref\n0 6\n0000000000 65535 f \n';
+    for (let n = 1; n <= 5; n++) xref += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+    push(`${xref}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`);
+    return new Blob(chunks, { type: 'application/pdf' });
+}
+
+function summaryFilename(ext) {
+    const day = str => slugifyForFilename((str || '').split(' ').slice(0, 3).join(' '));
+    const range = `${day(state.dateRange.from)}_to_${day(state.dateRange.to)}`;
+    return `rvn-usage-summary_${range}${state.excludeUS ? '_ex-us' : ''}.${ext}`;
+}
+
+function triggerDownload(href, filename) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = filename;
+    a.click();
+}
+
+async function downloadSummary(format) {
+    if (typeof html2canvas === 'undefined') {
+        showToast('Image library still loading — try again in a moment.');
+        return;
+    }
+    if (!state.summary) return;
+    const btn = $('btn-export');
+    btn.disabled = true;
+    showToast('Preparing summary…');
+
+    // Off-screen stage: rendered at a fixed width so the output is identical
+    // whatever size the user's window is.
+    const stage = document.createElement('div');
+    stage.className = 'summary-card-stage';
+    const card = buildSummaryCard();
+    stage.appendChild(card);
+    document.body.appendChild(stage);
+
+    try {
+        await document.fonts.ready;
+        const logo = card.querySelector('.sc-logo');
+        if (logo && !logo.complete) await new Promise(r => { logo.onload = logo.onerror = r; });
+
+        const canvas = await html2canvas(card, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            logging: false,
+        });
+
+        if (format === 'png') {
+            triggerDownload(canvas.toDataURL('image/png'), summaryFilename('png'));
+        } else {
+            const jpegUrl = canvas.toDataURL('image/jpeg', 0.92);
+            if (format === 'jpeg') {
+                triggerDownload(jpegUrl, summaryFilename('jpg'));
+            } else {
+                const bin = atob(jpegUrl.split(',')[1]);
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                const url = URL.createObjectURL(jpegToPdf(bytes, canvas.width, canvas.height));
+                triggerDownload(url, summaryFilename('pdf'));
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+            }
+        }
+        showToast('Summary downloaded.');
+    } catch (err) {
+        console.error('Summary export failed:', err);
+        showToast('Sorry — summary export failed. Try again?');
+    } finally {
+        stage.remove();
+        btn.disabled = false;
+    }
+}
+
+const summaryMenu = $('summary-export-menu');
+$('btn-export').addEventListener('click', e => {
+    e.stopPropagation();
+    document.querySelectorAll('.export-menu').forEach(m => { if (m !== summaryMenu) m.hidden = true; });
+    summaryMenu.hidden = !summaryMenu.hidden;
+    $('btn-export').setAttribute('aria-expanded', String(!summaryMenu.hidden));
+});
+summaryMenu.addEventListener('click', e => {
+    const item = e.target.closest('.export-menu-item');
+    if (!item) return;
+    summaryMenu.hidden = true;
+    $('btn-export').setAttribute('aria-expanded', 'false');
+    downloadSummary(item.dataset.format);
 });
 
 // "Export top N" — context-aware: dumps whatever's currently on screen
@@ -1561,8 +1786,9 @@ document.querySelectorAll('.export-split').forEach(split => {
 
 // Click anywhere else closes any open export menu.
 document.addEventListener('click', e => {
-    if (e.target.closest('.export-split')) return;
+    if (e.target.closest('.export-split') || e.target.closest('.summary-export')) return;
     document.querySelectorAll('.export-menu').forEach(m => { m.hidden = true; });
+    $('btn-export').setAttribute('aria-expanded', 'false');
 });
 
 // ── Loading helpers ──────────────────────────────────────────────────────────

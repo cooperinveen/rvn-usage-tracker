@@ -5,7 +5,7 @@ import urllib.request
 from functools import wraps
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, Response, session, redirect
-from backend.parser import parse_file, parse_asset_file, compute_zero_use, generate_export, generate_top_export
+from backend.parser import parse_file, parse_asset_file, compute_zero_use, generate_top_export
 
 FRONTEND_DIR = str(Path(__file__).parent.parent / 'frontend')
 
@@ -253,30 +253,6 @@ def _merge_zero_use(data, asset_bytes, asset_filename):
         ds['summary']['zero_use_stories'] = len(zero_use)
         ds['zero_use_warning'] = result['warning']
         ds['zero_use_excluded'] = result['excluded_recent']
-
-
-@app.route('/api/export', methods=['POST'])
-@login_required
-def export_summary():
-    """Generate XLSX from stories supplied by the client — no server-side state."""
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return jsonify({'error': 'Invalid request body'}), 400
-
-    stories = body.get('stories')
-    if not isinstance(stories, list) or len(stories) == 0:
-        return jsonify({'error': 'No stories provided'}), 400
-
-    try:
-        xlsx_bytes = generate_export(stories)
-    except Exception as e:
-        return jsonify({'error': f'Could not generate export: {str(e)}'}), 500
-
-    return Response(
-        xlsx_bytes,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': 'attachment; filename="reuters-usage-summary.xlsx"'}
-    )
 
 
 @app.route('/api/export-top', methods=['POST'])

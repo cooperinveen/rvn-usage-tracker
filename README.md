@@ -81,7 +81,7 @@ api/                  Vercel entry points
   blob-upload.js      Node.js handler — generates signed upload tokens
   index.py            Python entry point (imports Flask app)
 backend/
-  app.py              Flask routes (/auth/*, /api/process, /api/upload, /api/export, /api/me)
+  app.py              Flask routes (/auth/*, /api/process, /api/upload, /api/export-top, /api/me)
   auth.py             MSAL wrapper for Azure AD auth code flow
   parser.py           Teletrax CSV/XLSX ingestion and aggregation
 frontend/
