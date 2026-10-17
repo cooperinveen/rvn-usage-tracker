@@ -311,8 +311,11 @@ function renderSummaryBar() {
 
 // ── Insights Panel ───────────────────────────────────────────────────────────
 function renderInsights() {
-    const topStories = state.allStories.slice(0, 10);
-    const maxAirings = topStories[0]?.airings || 1;
+    // Ranked by channels (breadth of pickup), airings as the tie-break.
+    const topStories = [...state.allStories]
+        .sort((a, b) => b.channels - a.channels || b.airings - a.airings)
+        .slice(0, 10);
+    const maxChannels = topStories[0]?.channels || 1;
 
     $('top-stories-list').innerHTML = topStories.map((s, i) => `
         <div class="insight-item" data-story-id="${escHtml(s.story_id || s.slug)}">
@@ -320,9 +323,9 @@ function renderInsights() {
             <div style="flex:1; min-width:0">
                 <div class="insight-name">${slugDisplay(s)}</div>
                 ${s.headline ? `<div class="insight-headline">${escHtml(s.headline)}</div>` : ''}
-                <div class="insight-bar-wrap"><div class="insight-bar" style="width:${Math.round(s.airings/maxAirings*100)}%"></div></div>
+                <div class="insight-bar-wrap"><div class="insight-bar" style="width:${Math.round(s.channels/maxChannels*100)}%"></div></div>
             </div>
-            <span class="insight-count">${s.airings}</span>
+            <span class="insight-count" title="${s.channels} channels · ${s.airings} airings">${s.channels}</span>
         </div>
     `).join('');
 

@@ -826,6 +826,7 @@ td.col-date { font-size: 12px; color: var(--tr-text-light); }
     padding-bottom: 6px;
     border-bottom: 1px solid var(--tr-border);
 }
+.insights-title-note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--tr-text-light); margin-left: 4px; }
 .insights-title:not(:first-child) { margin-top: 20px; }
 .insights-list { display: flex; flex-direction: column; gap: 4px; }
 .insight-item {
