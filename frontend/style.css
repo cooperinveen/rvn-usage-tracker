@@ -466,6 +466,7 @@ body {
 .sc-col-wide { flex: 1.45; }
 .sc-h { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--tr-racing-green); margin: 0 0 8px; }
 .sc-h-gap { margin-top: 22px; }
+.sc-h-note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--tr-text-light); margin-left: 4px; }
 .sc-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: auto; }
 .sc-table thead { background: none; color: inherit; position: static; }
 .sc-table th { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tr-text-light); text-align: left; padding: 0 6px 6px; border-bottom: 1px solid var(--tr-border); }

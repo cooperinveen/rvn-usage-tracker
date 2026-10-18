@@ -318,11 +318,17 @@ function renderSummaryBar() {
 }
 
 // ── Insights Panel ───────────────────────────────────────────────────────────
-function renderInsights() {
-    // Ranked by channels (breadth of pickup), airings as the tie-break.
-    const topStories = [...state.allStories]
+// Top stories ranked by channels (breadth of pickup), airings as the tie-break.
+// Shared by the sidebar and the one-page summary so they always agree.
+function topStoriesByChannels(n) {
+    return state.allStories
+        .filter(st => !st.zero_use)
         .sort((a, b) => b.channels - a.channels || b.airings - a.airings)
-        .slice(0, 10);
+        .slice(0, n);
+}
+
+function renderInsights() {
+    const topStories = topStoriesByChannels(10);
     const maxChannels = topStories[0]?.channels || 1;
 
     $('top-stories-list').innerHTML = topStories.map((s, i) => `
@@ -1499,10 +1505,10 @@ function summaryHighlights() {
     const aired = state.allStories.filter(st => !st.zero_use);
     const out = [];
 
-    const top = aired.slice(0, SUMMARY_TOP_N);
+    const top = topStoriesByChannels(SUMMARY_TOP_N);
     const topAirings = top.reduce((n, st) => n + st.airings, 0);
     if (aired.length > SUMMARY_TOP_N) {
-        out.push(`The top ${SUMMARY_TOP_N} stories made up <strong>${pct(topAirings, s.total_airings)}%</strong> of all airings.`);
+        out.push(`The ${SUMMARY_TOP_N} most widely carried stories made up <strong>${pct(topAirings, s.total_airings)}%</strong> of all airings.`);
     }
 
     const widest = aired.reduce((best, st) => (!best || st.countries > best.countries ? st : best), null);
@@ -1528,7 +1534,7 @@ function summaryHighlights() {
 
 function buildSummaryCard() {
     const s = state.summary;
-    const stories = state.allStories.filter(st => !st.zero_use).slice(0, SUMMARY_TOP_N);
+    const stories = topStoriesByChannels(SUMMARY_TOP_N);
     const channels = state.topChannels.slice(0, SUMMARY_TOP_N);
     const markets = state.topMarkets.slice(0, SUMMARY_TOP_N);
     const generated = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -1587,7 +1593,7 @@ function buildSummaryCard() {
         ${highlights.length ? `<ul class="sc-highlights">${highlights.map(h => `<li>${h}</li>`).join('')}</ul>` : ''}
         <div class="sc-columns">
             <div class="sc-col sc-col-wide">
-                <h3 class="sc-h">Top ${stories.length} stories</h3>
+                <h3 class="sc-h">Top ${stories.length} stories <span class="sc-h-note">by channels</span></h3>
                 <table class="sc-table">
                     <thead><tr><th class="sc-rank"></th><th>Story</th><th class="sc-num">Airings</th><th class="sc-num">Channels</th><th class="sc-num">Countries</th></tr></thead>
                     <tbody>${storyRows}</tbody>
