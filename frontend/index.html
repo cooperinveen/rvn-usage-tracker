@@ -15,20 +15,18 @@
         <span class="header-divider"></span>
         <span class="tr-header-title">RVN Usage Tracker</span>
     </div>
-    <div class="header-right" id="header-status" style="display:none">
-        <span class="data-badge" id="data-badge"></span>
-        <button class="btn btn-outline btn-sm" id="btn-new-upload">New Upload</button>
-        <div class="summary-export">
-            <button class="btn btn-secondary btn-sm" id="btn-export" aria-haspopup="menu" aria-expanded="false" title="Download a one-page summary of this upload">
-                Download Summary
-                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div class="header-right">
+        <div class="header-actions" id="header-status" style="display:none">
+            <span class="data-badge" id="data-badge"></span>
+            <button class="btn btn-outline btn-sm" id="btn-new-upload">New Upload</button>
+            <button class="btn btn-outline btn-sm btn-help" id="btn-help" aria-haspopup="dialog" title="What everything on this page means">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6.25"/><path d="M6.3 6.2a1.8 1.8 0 0 1 3.5.6c0 1.2-1.8 1.6-1.8 2.7"/><path d="M8 11.6v.1"/>
+                </svg>
+                Help
             </button>
-            <div class="export-menu" id="summary-export-menu" hidden role="menu">
-                <button class="export-menu-item" data-format="png" role="menuitem">Image (PNG)</button>
-                <button class="export-menu-item" data-format="jpeg" role="menuitem">Image (JPEG)</button>
-                <button class="export-menu-item" data-format="pdf" role="menuitem">PDF</button>
-            </div>
         </div>
+        <a class="btn btn-secondary btn-sm btn-logout" href="/auth/logout" title="Sign out of RVN Usage Tracker">Logout</a>
     </div>
 </header>
 
@@ -102,9 +100,10 @@
 
     <!-- Summary Bar -->
     <div class="summary-bar" id="summary-bar">
+        <span class="summary-scope" id="summary-scope" hidden></span>
         <div class="summary-stat">
             <span class="stat-value" id="stat-stories">—</span>
-            <span class="stat-label">Stories tracked</span>
+            <span class="stat-label" id="stat-stories-label">Stories tracked</span>
         </div>
         <div class="summary-divider"></div>
         <div class="summary-stat">
@@ -127,6 +126,28 @@
             <span class="stat-label">Total air time</span>
         </div>
     </div>
+
+    <!-- Publish-day strip: narrow every view to the stories published on one
+         day (UTC), with Download Summary at the right. The day chips hide when
+         the upload covers a single publish day; the button stays. -->
+    <nav class="day-strip" id="day-strip" hidden aria-label="Filter by publish day">
+        <span class="day-strip-label">Published</span>
+        <div class="day-strip-days" id="day-strip-days" role="radiogroup" aria-label="Publish day"></div>
+        <div class="summary-export">
+            <button class="btn btn-outline btn-sm" id="btn-export" aria-haspopup="menu" aria-expanded="false" title="Download a one-page summary of what's on screen">
+                <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M8 2v9"/><path d="M4 7l4 4 4-4"/><path d="M3 14h10"/>
+                </svg>
+                Download Summary
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="export-menu" id="summary-export-menu" hidden role="menu">
+                <button class="export-menu-item" data-format="png" role="menuitem">Image (PNG)</button>
+                <button class="export-menu-item" data-format="jpeg" role="menuitem">Image (JPEG)</button>
+                <button class="export-menu-item" data-format="pdf" role="menuitem">PDF</button>
+            </div>
+        </div>
+    </nav>
 
     <!-- Main content: two-column layout -->
     <div class="dashboard-body">
@@ -334,6 +355,28 @@
             </button>
         </div>
     </div>
+</div>
+
+<!-- Help drawer: searchable key to every number, score and symbol -->
+<div class="help-backdrop" id="help-drawer" hidden>
+    <aside class="help-drawer" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <div class="help-head">
+            <div>
+                <h2 class="help-title" id="help-title">Help &amp; key</h2>
+                <p class="help-sub">What every number, score and symbol means</p>
+            </div>
+            <button class="modal-close" id="help-close" aria-label="Close help">✕</button>
+        </div>
+        <div class="help-search search-wrap">
+            <svg class="search-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="7" cy="7" r="5"/>
+                <path d="M11 11l3 3"/>
+            </svg>
+            <input type="text" id="help-search" class="search-input" placeholder="Search help — e.g. reach, orange bar, UTC…" autocomplete="off">
+            <button class="search-clear" id="help-search-clear" style="display:none" aria-label="Clear help search">✕</button>
+        </div>
+        <div class="help-body" id="help-body"></div>
+    </aside>
 </div>
 
 <!-- Loading overlay -->

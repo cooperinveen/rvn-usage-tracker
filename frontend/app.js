@@ -20,6 +20,7 @@ const state = {
     dateRange: {},
     datasets: { full: null, ex_us: null },  // both views from one upload; toggle swaps which is live
     excludeUS: false,
+    selectedDay: null,         // null = all days | 'YYYY-MM-DD' | 'earlier' (published before the window)
 };
 
 // ── DOM refs ────────────────────────────────────────────────────────────────
@@ -154,6 +155,7 @@ async function uploadFile(file) {
 
         state.datasets = { full: data.full, ex_us: data.ex_us };
         state.excludeUS = false;
+        state.selectedDay = null;
         const usToggleInput = $('us-toggle-input');
         if (usToggleInput) usToggleInput.checked = false;
         loadData(data.full);
@@ -230,16 +232,7 @@ async function uploadToBlob(file) {
 }
 
 function loadData(data) {
-    state.allStories = data.stories;
-    state.allChannels = data.channels || [];
-    state.summary = data.summary;
-    state.topChannels = data.top_channels;
-    state.topMarkets = data.top_markets;
-    state.dateRange = data.date_range;
-    state.trendLabels = data.trend_labels || [];
-    state.trendUnit = data.trend_unit || 'day';
-    state.dayContext = data.day_context || {};
-    state.zeroUseWarning = data.zero_use_warning || null;
+    setDataFields(data);
     state.currentPage = 1;
     state.chCurrentPage = 1;
     state.searchQuery = '';
@@ -250,6 +243,22 @@ function loadData(data) {
     setActiveView('stories');
 }
 
+// Point every state field the renders, modals and exports read from at `data`.
+// Split from loadData so the day strip can swap data without resetting the
+// user's search, region filter, sort or tab.
+function setDataFields(data) {
+    state.allStories = data.stories;
+    state.allChannels = data.channels || [];
+    state.summary = data.summary;
+    state.topChannels = data.top_channels;
+    state.topMarkets = data.top_markets;
+    state.dateRange = data.date_range;
+    state.trendLabels = data.trend_labels || [];
+    state.trendUnit = data.trend_unit || 'day';
+    state.dayContext = data.day_context || {};
+    state.zeroUseWarning = data.zero_use_warning || null;
+}
+
 // ── Show/hide screens ────────────────────────────────────────────────────────
 function showDashboard() {
     hideLoading();
@@ -258,6 +267,7 @@ function showDashboard() {
     headerStatus.style.display = 'flex';
     // Only offer the ex-US lens when there are US channels to remove.
     $('us-toggle').hidden = !state.datasets.ex_us;
+    renderDayStrip();
     renderSummaryBar();
     renderInsights();
     renderZeroUseWarning();
@@ -309,6 +319,11 @@ setRandomBanner();
 
 function renderSummaryBar() {
     const s = state.summary;
+    const day = state.selectedDay;
+    const scope = $('summary-scope');
+    scope.hidden = !day;
+    if (day) scope.textContent = `Published ${dayLongLabel(day)}`;
+    $('stat-stories-label').textContent = day ? 'Stories published' : 'Stories tracked';
     $('stat-stories').textContent = s.total_stories.toLocaleString();
     $('stat-airings').textContent = s.total_airings.toLocaleString();
     $('stat-channels').textContent = s.total_channels.toLocaleString();
@@ -402,12 +417,319 @@ $('us-toggle-input').addEventListener('change', (e) => {
     const ds = useExUS ? state.datasets.ex_us : state.datasets.full;
     if (!ds) return;
     state.excludeUS = useExUS;
+    // Keep the chosen publish day across the swap, unless the ex-US data has no
+    // stories published on it.
+    if (state.selectedDay && !dayIndex(ds).some(d => d.key === state.selectedDay && d.stories > 0)) state.selectedDay = null;
     const keepView = state.view;   // don't bounce the user back to Stories
-    loadData(ds);
+    loadData(dayView(ds, state.selectedDay));
     setActiveView(keepView);
+    renderDayStrip();
     renderSummaryBar();
     renderInsights();
     showToast(useExUS ? 'US channels excluded' : 'Showing all channels');
+});
+
+// ── Publish-day view ─────────────────────────────────────────────────────────
+// The day strip narrows every view to the stories *published* on one UTC day,
+// with all of their airings across the export window. Built here from the
+// breakdowns already in the payload — stories carry `publish_day` (UTC, from
+// the activation date) and channels carry per-story rows in `all_stories` —
+// so switching days is instant and needs no second trip to the server. The
+// one thing that can't be rebuilt is a channel's airings-over-time trend.
+const DAY_MS = 86400000;
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SIG_DIVERSITY_MIN_AIRINGS = 10;  // mirrors backend/parser.py
+
+const storyKey = s => s.story_id || s.slug;  // same identity as the backend's _story_key
+const ymdToMs = ymd => { const [y, m, d] = ymd.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+const msToYmd = ms => new Date(ms).toISOString().slice(0, 10);
+
+// '10 Oct 2026 01:30 UTC' (the backend's date_range format) → epoch ms, or null.
+function parseRangeStamp(str) {
+    const m = /^(\d{1,2}) (\w{3}) (\d{4}) (\d{2}):(\d{2})/.exec(str || '');
+    const mon = m ? MONTHS_SHORT.indexOf(m[2]) : -1;
+    return mon < 0 ? null : Date.UTC(+m[3], mon, +m[1], +m[4], +m[5]);
+}
+
+function windowBounds(ds) {
+    const start = parseRangeStamp(ds.date_range?.from);
+    return { startMs: start, startYmd: start != null ? msToYmd(start) : null, endMs: parseRangeStamp(ds.date_range?.to) };
+}
+
+// Strip bucket for a story: its UTC publish day, 'earlier' if it was published
+// before the export window opened, or null when the publish time is unknown
+// (those only appear under All days).
+function dayBucket(s, startYmd) {
+    if (!s.publish_day) return null;
+    return startYmd && s.publish_day < startYmd ? 'earlier' : s.publish_day;
+}
+
+// 'Tue', '14 Oct' for a chip; 'Tue 14 Oct 2026' for labels.
+function dayParts(ymd) {
+    const d = new Date(ymdToMs(ymd));
+    return [WEEKDAYS[d.getUTCDay()], `${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]}`];
+}
+function dayLongLabel(key) {
+    if (key === 'earlier') {
+        const { startYmd } = windowBounds(state.datasets.full || {});
+        return startYmd ? `before ${formatDayLabel(startYmd)}` : 'before this export';
+    }
+    return `${dayParts(key)[0]} ${formatDayLabel(key)}`;
+}
+
+// One entry per chip, oldest first: an 'earlier' bucket when needed, then every
+// day from the first to the last publish day — quiet days stay in as empty
+// chips so the row reads as a continuous calendar.
+function dayIndex(ds) {
+    const { startMs, startYmd, endMs } = windowBounds(ds);
+    const byKey = new Map();
+    for (const s of ds.stories) {
+        const key = dayBucket(s, startYmd);
+        if (!key) continue;
+        const d = byKey.get(key) || { stories: 0, airings: 0 };
+        d.stories++;
+        d.airings += s.airings;
+        byKey.set(key, d);
+    }
+    const out = [];
+    if (byKey.has('earlier')) out.push({ key: 'earlier', ...byKey.get('earlier'), coverage: null, accumulating: false });
+    const days = [...byKey.keys()].filter(k => k !== 'earlier').sort();
+    if (!days.length) return out;
+    for (let ms = ymdToMs(days[0]); ms <= ymdToMs(days[days.length - 1]); ms += DAY_MS) {
+        const key = msToYmd(ms);
+        // A story needs 24h on air before its numbers settle (the same bar
+        // longevity uses). If the export ends under 48h after this day began,
+        // some of its stories haven't had that yet.
+        const accumulating = endMs != null && endMs < ms + 2 * DAY_MS;
+        // Share of this UTC day that falls inside the export window (0–1), so
+        // a day the export only partly covers is visible at a glance.
+        const coverage = startMs != null && endMs != null
+            ? Math.max(0, Math.min(ms + DAY_MS, endMs) - Math.max(ms, startMs)) / DAY_MS
+            : null;
+        out.push({ key, ...(byKey.get(key) || { stories: 0, airings: 0 }), coverage, accumulating });
+    }
+    return out;
+}
+
+// Dataset-shaped view of `ds` narrowed to one publish day, cached per dataset
+// so flicking back and forth between days doesn't rebuild anything.
+const dayViewCache = new WeakMap();
+function dayView(ds, day) {
+    if (!ds || !day) return ds;
+    let perDs = dayViewCache.get(ds);
+    if (!perDs) { perDs = new Map(); dayViewCache.set(ds, perDs); }
+    if (!perDs.has(day)) perDs.set(day, buildDayView(ds, day));
+    return perDs.get(day);
+}
+
+function buildDayView(ds, day) {
+    const { startYmd } = windowBounds(ds);
+    const stories = ds.stories.filter(s => dayBucket(s, startYmd) === day);
+    const channels = deriveDayChannels(ds.channels || [], new Set(stories.map(storyKey)));
+
+    // Distinct channels/countries come from each story's own breakdown, so a
+    // channel that aired three of the day's stories still counts once.
+    const chSet = new Set();
+    const markets = new Map();
+    let airings = 0, airSecs = 0;
+    for (const s of stories) {
+        airings += s.airings;
+        airSecs += s.total_air_secs || 0;
+        for (const c of s.all_channels || []) chSet.add(c.channel);
+        for (const m of s.all_markets || []) markets.set(m.market, (markets.get(m.market) || 0) + m.airings);
+    }
+    const summary = {
+        ...ds.summary,
+        total_airings: airings,
+        total_stories: stories.length,
+        total_channels: chSet.size,
+        total_countries: markets.size,
+        total_air_time: secondsToHms(airSecs),
+        zero_airing_stories: stories.filter(s => s.airings === 0 && !s.zero_use).length,
+        zero_use_stories: stories.filter(s => s.zero_use).length,
+    };
+    const top_channels = channels.slice(0, 10).map(c => ({
+        channel: c.channel, airings: c.airings, air_time: c.total_air_time, country: c.country,
+    }));
+    const top_markets = [...markets]
+        .map(([market, a]) => ({ market, airings: a }))
+        .sort((a, b) => b.airings - a.airings)
+        .slice(0, 10);
+    return { ...ds, summary, stories, channels, top_channels, top_markets };
+}
+
+// Rebuild each channel from just its rows for the day's stories. Mirrors the
+// backend's per-channel pass: story-origin mix (top 8 + Other), damped
+// Gini-Simpson diversity, and significance re-ranked among these channels.
+function deriveDayChannels(channels, keys) {
+    const out = [];
+    for (const c of channels) {
+        const rows = (c.all_stories || []).filter(r => keys.has(r.story_id || r.slug));
+        if (!rows.length) continue;
+        let airings = 0, secs = 0;
+        const mix = new Map();
+        for (const r of rows) {
+            airings += r.airings;
+            secs += hmsToSeconds(r.air_time);
+            mix.set(r.origin_country, (mix.get(r.origin_country) || 0) + r.airings);
+        }
+        let simpson = 0;
+        for (const v of mix.values()) simpson += (v / airings) ** 2;
+        let mixSorted = [...mix].sort((a, b) => b[1] - a[1]);
+        if (mixSorted.length > 8) {
+            const other = mixSorted.slice(8).reduce((n, [, v]) => n + v, 0);
+            mixSorted = [...mixSorted.slice(0, 8), ['Other', other]];
+        }
+        out.push({
+            ...c,
+            airings,
+            stories: rows.length,
+            total_air_secs: secs,
+            total_air_time: secondsToHms(secs),
+            avg_clip_secs: Math.floor(secs / airings),
+            avg_clip: secondsToHms(secs / airings),
+            all_stories: rows,
+            story_country_mix: mixSorted.map(([country, a]) => ({ country, airings: a })),
+            trend: [],              // per-channel airing times aren't in the payload
+            first_seen: '',
+            last_seen: '',
+            days_active: null,
+            _diversity: (1 - simpson) * Math.min(1, airings / SIG_DIVERSITY_MIN_AIRINGS),
+        });
+    }
+    const vol = percentileRanks(out.map(c => c.airings));
+    const brd = percentileRanks(out.map(c => c.stories));
+    const div = percentileRanks(out.map(c => c._diversity));
+    out.forEach((c, i) => {
+        c.sig_volume = roundHalfEven(vol[i]);
+        c.sig_breadth = roundHalfEven(brd[i]);
+        c.sig_diversity = roundHalfEven(div[i]);
+        c.significance = roundHalfEven((vol[i] + brd[i] + div[i]) / 3);
+        delete c._diversity;
+    });
+    return out.sort((a, b) => b.airings - a.airings);
+}
+
+// Python's round(): halves go to the even neighbour (62.5 → 62), so scores
+// match the backend's exactly rather than drifting by 1 on a tie.
+function roundHalfEven(x) {
+    const r = Math.round(x);
+    return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
+// Port of backend _percentile_ranks: 0–100, ties share their average rank.
+function percentileRanks(values) {
+    const n = values.length;
+    if (n === 0) return [];
+    if (n === 1) return [100];
+    const order = values.map((_, i) => i).sort((a, b) => values[a] - values[b]);
+    const ranks = new Array(n);
+    for (let i = 0; i < n;) {
+        let j = i;
+        while (j + 1 < n && values[order[j + 1]] === values[order[i]]) j++;
+        const pctRank = 100 * ((i + j) / 2) / (n - 1);
+        for (let k = i; k <= j; k++) ranks[order[k]] = pctRank;
+        i = j + 1;
+    }
+    return ranks;
+}
+
+// Port of backend _seconds_to_hms ('45s', '2m 34s', '1h 4m') and its inverse.
+function secondsToHms(seconds) {
+    const s = Math.floor(seconds);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+function hmsToSeconds(str) {
+    const m = /^(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?$/.exec(String(str || '').trim());
+    return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0;
+}
+
+function baseDataset() {
+    return state.excludeUS ? state.datasets.ex_us : state.datasets.full;
+}
+
+function renderDayStrip() {
+    const strip = $('day-strip');
+    const base = baseDataset();
+    const days = base ? dayIndex(base) : [];
+    strip.hidden = false;
+    strip.classList.toggle('no-days', days.filter(d => d.stories > 0).length < 2);
+    if (strip.classList.contains('no-days')) return;
+
+    const sel = state.selectedDay;
+    const allChip = `
+        <button type="button" class="day-chip day-chip-all" role="radio" data-day=""
+                aria-checked="${!sel}" tabindex="${sel ? -1 : 0}" title="Every story in this upload">
+            <span class="day-chip-dow">All days</span>
+            <span class="day-chip-date">${base.stories.length.toLocaleString()} stories</span>
+            <span class="day-chip-bar" aria-hidden="true"></span>
+        </button>`;
+    const dayChips = days.map(d => {
+        const on = d.key === sel;
+        const [dow, date] = d.key === 'earlier' ? ['Earlier', 'pre-window'] : dayParts(d.key);
+        const covered = d.coverage == null ? null : Math.round(d.coverage * 100);
+        const tip = [
+            dayLongLabel(d.key),
+            covered == null ? null : covered === 100 ? 'whole day in this export' : `${covered}% of the day in this export`,
+            d.stories
+                ? `${d.stories.toLocaleString()} stor${d.stories === 1 ? 'y' : 'ies'} published · ${d.airings.toLocaleString()} airings`
+                : 'no stories published',
+            d.accumulating && d.stories ? 'some had under 24h on air before the export ended' : null,
+        ].filter(Boolean).join(' · ');
+        return `
+        <button type="button" class="day-chip" role="radio"
+                data-day="${d.key}" aria-checked="${on}" tabindex="${on ? 0 : -1}"
+                title="${escHtml(tip)}" ${d.stories ? '' : 'disabled'}>
+            <span class="day-chip-dow">${dow}</span>
+            <span class="day-chip-date">${date}</span>
+            ${d.accumulating && d.stories ? '<span class="day-chip-dot" aria-hidden="true"></span>' : ''}
+            <span class="day-chip-bar${covered == null ? ' is-empty' : ''}" aria-hidden="true"><span class="day-chip-fill" style="width:${covered || 0}%"></span></span>
+        </button>`;
+    }).join('');
+    $('day-strip-days').innerHTML = allChip + '<span class="day-strip-sep" aria-hidden="true"></span>' + dayChips;
+
+}
+
+function selectDay(day) {
+    if (day === state.selectedDay) return;
+    state.selectedDay = day;
+    setDataFields(dayView(baseDataset(), day));
+    state.currentPage = 1;
+    state.chCurrentPage = 1;
+    setActiveView(state.view);   // re-runs the live tab's search/filter/sort on the new data
+    renderDayStrip();
+    renderSummaryBar();
+    renderInsights();
+    // Brief fade on the figures that changed, so the swap reads as one motion.
+    ['summary-bar', 'insights-panel', 'stories-table-wrap', 'channels-table-wrap'].forEach(id => {
+        const el = $(id);
+        el.classList.remove('day-swap');
+        void el.offsetWidth;  // restart the animation
+        el.classList.add('day-swap');
+    });
+}
+
+$('day-strip-days').addEventListener('click', e => {
+    const chip = e.target.closest('.day-chip');
+    if (!chip || chip.disabled) return;
+    selectDay(chip.dataset.day || null);
+    $('day-strip-days').querySelector('.day-chip[aria-checked="true"]')?.focus();
+});
+
+// Radio-group keys: arrows step through the enabled chips, Home/End jump.
+$('day-strip-days').addEventListener('keydown', e => {
+    const chips = [...$('day-strip-days').querySelectorAll('.day-chip:not([disabled])')];
+    const i = chips.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: chips.length - 1 }[e.key];
+    if (next == null) return;
+    e.preventDefault();
+    const target = chips[Math.max(0, Math.min(chips.length - 1, next))];
+    selectDay(target.dataset.day || null);
+    $('day-strip-days').querySelector('.day-chip[aria-checked="true"]')?.focus();
 });
 
 // ── Filtering & Search ───────────────────────────────────────────────────────
@@ -636,7 +958,7 @@ function renderChannelTable() {
             </td>
             <td class="col-num">${c.stories.toLocaleString()}</td>
             <td class="col-time">${escHtml(c.total_air_time)}</td>
-            <td class="col-trend">${sparkline}</td>
+            <td class="col-trend">${sparkline || '<span class="muted" title="Not available when viewing one publish day">—</span>'}</td>
             <td class="col-significance">${significanceDisplay(c.significance)}</td>
         </tr>`;
     }).join('');
@@ -974,10 +1296,12 @@ function openChannelModal(channelName) {
     // innerHTML is safe here: all interpolated values are server-cast ints or
     // the _seconds_to_hms string (no user-controlled content).
     const daysWord = c.days_active === 1 ? 'day' : 'days';
+    const span = state.selectedDay
+        ? `published ${escHtml(dayLongLabel(state.selectedDay))}`
+        : `over <strong>${c.days_active}</strong> ${daysWord}`;
     chModalSummary.innerHTML = `
         <strong>${c.airings.toLocaleString()}</strong> airings of
-        <strong>${c.stories.toLocaleString()}</strong> stories over
-        <strong>${c.days_active}</strong> ${daysWord}
+        <strong>${c.stories.toLocaleString()}</strong> stories ${span}
         (<strong>${escHtml(c.total_air_time)}</strong> total air time)
     `;
     // Each modal open starts with a clean slate — no filter leakage between channels
@@ -1244,7 +1568,7 @@ function renderSignificanceStrip(c) {
         <div class="modal-section sig-strip">
             <div class="sig-strip-head">
                 ${significanceDisplay(c.significance, true)}
-                <span class="sig-strip-label">Significance<small>ranked within this upload</small></span>
+                <span class="sig-strip-label">Significance<small>ranked within ${state.selectedDay ? 'this publish day' : 'this upload'}</small></span>
             </div>
             <div class="sig-gauges">${gauges}</div>
         </div>`;
@@ -1264,6 +1588,9 @@ function renderChannelModalBody(c) {
                 ${trendChart ? `
                 <div class="modal-overview-chart">
                     <div class="trend-chart-wrap">${trendChart}</div>
+                </div>` : state.selectedDay ? `
+                <div class="modal-overview-chart">
+                    <p class="trend-na">Airings over time aren't broken down per channel for a single publish day. Switch to <strong>All days</strong> to see this channel's trend.</p>
                 </div>` : ''}
             </div>
         </div>
@@ -1516,8 +1843,8 @@ function summaryHighlights() {
         out.push(`Widest reach: <strong>${escHtml(displaySlug(widest))}</strong> aired in ${widest.countries.toLocaleString()} countries on ${widest.channels.toLocaleString()} channels.`);
     }
 
-    const full = state.datasets.full;
-    const exUs = state.datasets.ex_us;
+    const full = dayView(state.datasets.full, state.selectedDay);
+    const exUs = dayView(state.datasets.ex_us, state.selectedDay);
     if (state.excludeUS) {
         out.push('US channels are <strong>excluded</strong> from every figure on this page.');
     } else if (full && exUs) {
@@ -1580,7 +1907,7 @@ function buildSummaryCard() {
             <img class="sc-logo" src="images/tr_pri_logo_rgb_color.png" alt="Thomson Reuters">
             <div class="sc-title-wrap">
                 <div class="sc-title">RVN Usage Summary</div>
-                <div class="sc-range">${escHtml(state.dateRange.from)} – ${escHtml(state.dateRange.to)}${state.excludeUS ? ' · <span class="sc-chip">Excluding US channels</span>' : ''}</div>
+                <div class="sc-range">${escHtml(state.dateRange.from)} – ${escHtml(state.dateRange.to)}${state.selectedDay ? ` · <span class="sc-chip">Published ${escHtml(dayLongLabel(state.selectedDay))} only</span>` : ''}${state.excludeUS ? ' · <span class="sc-chip">Excluding US channels</span>' : ''}</div>
             </div>
         </div>
         <div class="sc-stats">
@@ -1654,7 +1981,8 @@ function jpegToPdf(jpegBytes, widthPx, heightPx) {
 function summaryFilename(ext) {
     const day = str => slugifyForFilename((str || '').split(' ').slice(0, 3).join(' '));
     const range = `${day(state.dateRange.from)}_to_${day(state.dateRange.to)}`;
-    return `rvn-usage-summary_${range}${state.excludeUS ? '_ex-us' : ''}.${ext}`;
+    const published = state.selectedDay ? `_published-${state.selectedDay}` : '';
+    return `rvn-usage-summary_${range}${published}${state.excludeUS ? '_ex-us' : ''}.${ext}`;
 }
 
 function triggerDownload(href, filename) {
@@ -1807,6 +2135,148 @@ document.addEventListener('click', e => {
     document.querySelectorAll('.export-menu').forEach(m => { m.hidden = true; });
     $('btn-export').setAttribute('aria-expanded', 'false');
 });
+
+// ── Help drawer ──────────────────────────────────────────────────────────────
+// Searchable key to everything on the dashboard. Each entry is plain text
+// (paragraphs) so search highlighting can't break markup; `demo` is optional
+// trusted HTML showing the real symbol, and `keys` adds search-only synonyms.
+const helpDemoChip = (dow, date, fill, dot) => `
+    <span class="day-chip"><span class="day-chip-dow">${dow}</span><span class="day-chip-date">${date}</span>
+    ${dot ? '<span class="day-chip-dot"></span>' : ''}
+    <span class="day-chip-bar"><span class="day-chip-fill" style="width:${fill}%"></span></span></span>`;
+
+const HELP_SECTIONS = [
+    { title: 'The basics', entries: [
+        { title: 'Airings', keys: 'detection hit plays',
+          body: ['One airing is one Teletrax detection: a monitored channel playing part of a Reuters story. A story played five times on one channel counts as five airings.'] },
+        { title: 'Channels and countries', keys: 'markets international region broadcast',
+          body: ['Channels is the number of different monitored channels that aired the story. Countries is where those channels broadcast, taken from Teletrax’s channel region — so pan-regional channels such as France 24 count as “International”.'] },
+        { title: 'Air time', keys: 'duration length seconds',
+          body: ['The total amount of the story actually played, added up across every airing. In a story’s window, “Avg clip used” is that total divided by the number of airings.'] },
+        { title: 'Number before the slug', keys: 'story id prefix 9205 edition',
+          body: ['The number in front of each slug (e.g. 9205-POPE-HEALTH/) is the start of the story’s Story ID. Reuters reuses slugs, so it tells different editions of the same slug apart.'] },
+        { title: 'Date published', keys: 'activation publish time utc',
+          body: ['When the story was published — its activation date in Teletrax — in UTC.'] },
+    ]},
+    { title: 'Publish days', entries: [
+        { title: 'Picking a day', keys: 'day strip chip filter published date select arrow keys',
+          demo: helpDemoChip('Tue', '13 Oct', 100),
+          body: ['Click a day under the banner to narrow everything — the banner numbers, both tables, the sidebar, channel windows and Download Summary — to the stories published that day. “All days” goes back to the whole upload. Arrow keys step through the days.',
+                 'Each story still shows all of its airings across the whole export, not just the airings that happened on that day.'] },
+        { title: 'Days run on UTC', keys: 'timezone midnight singapore sgt gmt',
+          body: ['A day is midnight to midnight UTC, so every story is filed under the same day for everyone. For example, a story published at 07:00 Singapore time on a Tuesday counts as Monday (23:00 UTC).'] },
+        { title: 'Orange bar under a day', keys: 'coverage partial bar line full',
+          demo: helpDemoChip('Sat', '10 Oct', 94) + helpDemoChip('Sun', '11 Oct', 100),
+          body: ['How much of that day the export covers. A full bar means the whole day is in the upload; a shorter bar means the export starts or ends partway through it, so that day isn’t fully represented. Hover a day for the exact figure.'] },
+        { title: 'Amber dot on a day', keys: 'dot warning 24 hours still climbing incomplete accumulating',
+          demo: '<span class="help-dot"></span>',
+          body: ['Some stories published that day had less than 24 hours on air before the export ended, so their numbers are still climbing. Compare that day with earlier days carefully.'] },
+        { title: 'Earlier', keys: 'before window pre-window older',
+          body: ['Appears only if the upload includes stories published before the export window opened. Only their airings inside the window are counted.'] },
+        { title: 'Faded day', keys: 'disabled grey empty no stories',
+          body: ['No stories were published that day, so there’s nothing to show.'] },
+        { title: 'Channel trend in a single day', keys: 'dash missing unavailable sparkline',
+          body: ['When one day is picked, the Channels table shows “—” for Trend. The export doesn’t break each channel’s airings down by time for a subset of stories. Switch to All days to see channel trends.'] },
+    ]},
+    { title: 'Scores and symbols', entries: [
+        { title: 'Reach (stories)', keys: 'score 0-100 breadth widest pickup',
+          demo: reachDisplay(97) + reachDisplay(52) + reachDisplay(14),
+          body: ['How widely a story was picked up, from 0 to 100. It averages how the story ranks on number of channels and number of countries against every other story in this upload — 100 is the widest in the upload. Airings don’t count towards it.',
+                 'Green is 66 and above, gold 33–65, grey below 33. When a day is picked, scores stay ranked against the whole upload so days can be compared.'] },
+        { title: 'Longevity', keys: 'legs 24 hours percent dash staying power',
+          demo: longevityDisplay(73) + longevityDisplay(42) + longevityDisplay(11),
+          body: ['The share of a story’s airings that came more than 24 hours after it was published. Higher means the story had legs. Green is 60% and above, gold 30–59%, grey below 30%.',
+                 '“—” means it was published less than 24 hours before the export ended (or has no publish time), so it can’t be judged fairly yet.'] },
+        { title: 'Significance (channels)', keys: 'score volume breadth diversity 0-100',
+          demo: significanceDisplay(91) + significanceDisplay(47),
+          body: ['An overall score for a channel, from 0 to 100: the average of how it ranks against the other channels in this upload on Volume (airings), Breadth (different stories aired) and Diversity (how spread its stories’ origin countries are — channels with under 10 airings are scored down so a handful of plays can’t look diverse).',
+                 'When a day is picked, channels are re-ranked against the other channels that aired that day’s stories.'] },
+        { title: 'Trend', keys: 'sparkline bars chart per day hour',
+          demo: renderSparkline([2, 6, 9, 4, 2, 1, 3], null, 'day'),
+          body: ['Airings per day across the export (per hour if the export covers less than a day; at most 14 bars). Hover a bar for its count.'] },
+        { title: 'Sidebar bars', keys: 'top stories channels countries orange line',
+          body: ['The orange line under each sidebar item shows it relative to the number-one item in that list. Top Stories are ranked by number of channels.'] },
+        { title: 'Tinted rows with zeros', keys: 'zero-use zero use never aired asset export',
+          body: ['If you added an Asset export when uploading, stories that were published but never aired on any monitored channel are listed with zeros on a lightly tinted row, and counted as zero-use.'] },
+    ]},
+    { title: 'Filters and windows', entries: [
+        { title: 'Region filter', keys: 'europe americas asia pacific middle east africa pills',
+          body: ['Based on the story’s slug, not where it aired — USA-CHINA/… counts for both Americas and Asia Pacific. A story can sit in more than one region.'] },
+        { title: 'Search', keys: 'find slug headline channel name',
+          body: ['On Stories, searches slugs and headlines. On Channels, searches channel names and countries.'] },
+        { title: 'Exclude US channels', keys: 'usa toggle ex-us international',
+          body: ['Removes US-based channels and their airings from every figure, including the summary download. Switching it clears your search and region filter.'] },
+        { title: 'Story window', keys: 'modal details on this day family',
+          body: ['Click a story for its full channel list. “On this day” shows how that day’s airings split across slug families (IRAN-CRISIS, USA-TARIFFS…) for stories published the same day — this story’s family is outlined.'] },
+        { title: 'Channel window', keys: 'modal pie chart origin country click',
+          body: ['Click a channel for its stories. The pie shows where its stories came from, using the first word of each slug (USA, IRAN…), weighted by airings. Click a slice or legend row to filter the list; click again to clear.'] },
+    ]},
+    { title: 'Downloads', entries: [
+        { title: 'Download Summary', keys: 'png jpeg pdf one page briefing export',
+          body: ['A one-page briefing of what’s on screen — headline numbers, highlights and top 10 stories, channels and countries. It follows the picked day and the Exclude US switch, and says so on the page.'] },
+        { title: 'Export top 25 / 50 / 100', keys: 'excel xlsx spreadsheet',
+          body: ['An Excel file of the top rows currently in the table, in your current order, with your search and filters applied.'] },
+        { title: 'Download view', keys: 'png image story channel window',
+          body: ['Saves a story or channel window as an image, with up to 100 rows of its list.'] },
+    ]},
+];
+
+function helpHighlight(text, terms) {
+    if (!terms.length) return escHtml(text);
+    const re = new RegExp(`(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+    return text.split(re).map((part, i) => i % 2 ? `<mark>${escHtml(part)}</mark>` : escHtml(part)).join('');
+}
+
+function renderHelp() {
+    const terms = $('help-search').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    const html = HELP_SECTIONS.map(sec => {
+        const entries = sec.entries.filter(e => {
+            const hay = `${e.title} ${e.keys || ''} ${e.body.join(' ')}`.toLowerCase();
+            return terms.every(t => hay.includes(t));
+        });
+        shown += entries.length;
+        if (!entries.length) return '';
+        return `
+            <h3 class="help-section-title">${escHtml(sec.title)}</h3>
+            ${entries.map(e => `
+            <div class="help-entry">
+                <div class="help-entry-head">
+                    <h4 class="help-entry-title">${helpHighlight(e.title, terms)}</h4>
+                    ${e.demo ? `<span class="help-demo" aria-hidden="true">${e.demo}</span>` : ''}
+                </div>
+                ${e.body.map(p => `<p>${helpHighlight(p, terms)}</p>`).join('')}
+            </div>`).join('')}`;
+    }).join('');
+    $('help-body').innerHTML = shown
+        ? (terms.length ? `<p class="help-count">${shown} result${shown === 1 ? '' : 's'}</p>` : '') + html
+        : `<div class="help-empty">Nothing matches “${escHtml(terms.join(' '))}”. Try a simpler word.</div>`;
+    $('help-search-clear').style.display = terms.length ? 'block' : 'none';
+}
+
+function openHelp() {
+    $('help-drawer').hidden = false;
+    document.body.style.overflow = 'hidden';
+    renderHelp();
+    $('help-search').focus();
+}
+function closeHelp() {
+    if ($('help-drawer').hidden) return;
+    $('help-drawer').hidden = true;
+    if (storyModal.style.display === 'none' && channelModal.style.display === 'none') document.body.style.overflow = '';
+    $('btn-help').focus();
+}
+
+$('btn-help').addEventListener('click', openHelp);
+$('help-close').addEventListener('click', closeHelp);
+$('help-drawer').addEventListener('click', e => { if (e.target === $('help-drawer')) closeHelp(); });
+$('help-search').addEventListener('input', renderHelp);
+$('help-search-clear').addEventListener('click', () => {
+    $('help-search').value = '';
+    renderHelp();
+    $('help-search').focus();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeHelp(); });
 
 // ── Loading helpers ──────────────────────────────────────────────────────────
 const RING_CIRCUMFERENCE = 163.4; // 2π·26, must match .progress-ring-fill dasharray

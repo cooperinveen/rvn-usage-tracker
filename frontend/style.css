@@ -83,6 +83,12 @@ body {
     letter-spacing: -0.02em;
 }
 .header-right { display: flex; align-items: center; gap: 10px; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+/* Solid twin of the outline buttons beside it: same 1px border so the heights
+   match (doubled class so it beats .btn's border:none, defined further down),
+   and it flips to the outline look on hover — the mirror of theirs. */
+.btn.btn-logout { border: 1px solid var(--tr-racing-green); }
+.btn.btn-logout:hover { background: #fff; color: var(--tr-racing-green); }
 .data-badge {
     font-size: 12px;
     color: var(--tr-text-light);
@@ -236,6 +242,184 @@ body {
 .stat-value { display: block; font-size: 28px; font-weight: 700; color: #fff; line-height: 1.1; text-shadow: 0 1px 3px rgba(0,0,0,0.35); }
 .stat-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: rgba(255,255,255,0.65); margin-top: 3px; }
 .summary-divider { width: 1px; height: 40px; background: rgba(255,255,255,0.2); }
+/* "Published Tue 14 Oct 2026" tag pinned to the banner's corner while a day is picked. */
+.summary-scope {
+    position: absolute !important;
+    top: 10px;
+    left: 16px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #fff;
+    background: var(--tr-orange);
+    padding: 3px 9px;
+    border-radius: 2px;
+}
+.summary-scope[hidden] { display: none; }
+
+/* ── Publish-day strip ── */
+.day-strip {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 32px 10px 24px;   /* right edge lines up with Logout */
+    background: #fff;
+    border-bottom: 1px solid var(--tr-border);
+    flex-wrap: wrap;
+}
+.day-strip[hidden] { display: none; }
+.day-strip.no-days .day-strip-label, .day-strip.no-days .day-strip-days { display: none; }
+.day-strip .summary-export { margin-left: auto; }
+.day-strip #btn-export { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.day-strip-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--tr-text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.day-strip-days {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    min-width: 0;
+    max-width: 100%;
+    padding: 2px;            /* room for the focus ring */
+}
+.day-strip-sep { width: 1px; background: var(--tr-border); margin: 4px 4px; flex: none; }
+.day-chip {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    position: relative;
+    min-width: 66px;
+    padding: 6px 10px 7px;
+    border: 1px solid var(--tr-border);
+    border-radius: 2px;
+    background: #fff;
+    font-family: 'Knowledge', 'Clario', sans-serif;
+    color: var(--tr-text);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+}
+.day-chip:not([aria-checked="true"]):not([disabled]):hover { border-color: var(--tr-racing-green); }
+.day-chip:not([aria-checked="true"]):not([disabled]):hover .day-chip-date { color: var(--tr-racing-green); }
+.day-chip:focus-visible { outline: 2px solid var(--tr-dark-sky); outline-offset: 2px; }
+.day-chip[disabled] { cursor: default; opacity: 0.45; }
+.day-chip-dow {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--tr-text-light);
+    line-height: 1.2;
+}
+.day-chip-date { font-size: 13px; font-weight: 500; line-height: 1.25; white-space: nowrap; transition: color 0.15s; }
+/* How much of the day the export covers — full bar = whole day. Same thin
+   orange rule as the insights-panel bars. */
+.day-chip-bar {
+    display: block;
+    align-self: stretch;
+    height: 3px;
+    margin-top: 4px;
+    background: var(--tr-border);
+    border-radius: 1px;
+    overflow: hidden;
+}
+.day-chip-fill { display: block; height: 100%; background: var(--tr-orange); border-radius: 1px; }
+.day-chip-all .day-chip-bar, .day-chip-bar.is-empty { visibility: hidden; }
+.day-chip[aria-checked="true"] {
+    background: var(--tr-racing-green);
+    border-color: var(--tr-racing-green);
+    color: #fff;
+}
+.day-chip[aria-checked="true"] .day-chip-dow { color: rgba(255,255,255,0.7); }
+.day-chip[aria-checked="true"] .day-chip-date { color: #fff; }
+.day-chip[aria-checked="true"] .day-chip-bar { background: rgba(255,255,255,0.22); }
+/* Amber dot: some of the day's stories had under 24h on air before the export ended. */
+.day-chip-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--tr-dark-gold);
+}
+
+/* ── Help drawer ── */
+.btn-help { display: inline-flex; align-items: center; gap: 5px; }
+.help-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    background: rgba(18,48,21,0.45);
+    backdrop-filter: blur(2px);
+    display: flex;
+    justify-content: flex-end;
+    animation: help-fade 0.2s ease-out;
+}
+.help-backdrop[hidden] { display: none; }
+.help-drawer {
+    width: 440px;
+    max-width: 100%;
+    height: 100%;
+    background: #fff;
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    border-left: 3px solid var(--tr-racing-green);
+    animation: help-slide 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes help-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes help-slide { from { transform: translateX(24px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .help-backdrop, .help-drawer { animation: none; } }
+.help-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 20px 24px 14px;
+}
+.help-title { margin: 0; font-size: 20px; font-weight: 700; color: var(--tr-racing-green); letter-spacing: -0.01em; }
+.help-sub { margin: 3px 0 0; font-size: 13px; color: var(--tr-text-light); }
+.help-search { margin: 0 24px 6px; }
+.help-body { flex: 1; overflow-y: auto; padding: 4px 24px 32px; }
+.help-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--tr-racing-green);
+    margin: 22px 0 4px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--tr-orange);
+    display: inline-block;
+}
+.help-entry { padding: 12px 0; border-bottom: 1px solid var(--tr-border); }
+.help-entry:last-child { border-bottom: none; }
+.help-entry-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.help-entry-title { font-size: 14px; font-weight: 700; color: var(--tr-text); margin: 0; }
+.help-demo { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.help-demo .day-chip { cursor: default; min-width: 60px; pointer-events: none; }
+.help-entry p { margin: 0 0 6px; font-size: 13px; line-height: 1.55; color: #3d4349; }
+.help-entry p:last-child { margin-bottom: 0; }
+.help-entry mark { background: var(--tr-light-gold); color: inherit; padding: 0 1px; border-radius: 2px; }
+.help-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--tr-dark-gold); }
+.help-empty { padding: 32px 0; text-align: center; font-size: 14px; color: var(--tr-text-light); }
+.help-count { font-size: 12px; color: var(--tr-text-light); margin: 10px 0 0; }
+
+/* Soft fade on the figures that change when a different day is picked. */
+@keyframes day-swap-in { from { opacity: 0.35; } to { opacity: 1; } }
+.day-swap { animation: day-swap-in 0.28s ease-out; }
+@media (prefers-reduced-motion: reduce) { .day-swap { animation: none; } }
 
 /* ── Dashboard Body ── */
 .dashboard-body {
@@ -517,7 +701,7 @@ tbody tr:last-child td { border-bottom: none; }
 tr.story-row { cursor: pointer; }
 tr.story-row:hover { background: #f5f7f9; }
 tr.story-row:focus { outline: none; background: #eef2f4; box-shadow: inset 2px 0 0 var(--tr-racing-green); }
-.slug-cell .muted, td.col-date .muted { color: var(--tr-text-light); }
+.slug-cell .muted, td.col-date .muted, td.col-trend .muted { color: var(--tr-text-light); }
 
 .col-num { text-align: right; width: 90px; }
 .col-time { width: 100px; }
@@ -682,6 +866,15 @@ td.col-significance { text-align: right; font-variant-numeric: tabular-nums; }
     letter-spacing: 0.6px;
     color: var(--tr-text-light);
     margin: 0 0 10px;
+}
+.trend-na {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--tr-text-light);
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px dashed var(--tr-border);
+    border-radius: var(--radius);
 }
 .pie-empty {
     font-size: 13px;
@@ -1141,6 +1334,9 @@ td.col-date { font-size: 12px; color: var(--tr-text-light); }
     .summary-stat { padding: 4px 16px; }
     .stat-value { font-size: 22px; }
     .summary-divider { height: 28px; }
+    /* No room for a corner tag on narrow screens — it becomes a ribbon across the top. */
+    .summary-scope { position: static !important; flex-basis: calc(100% + 32px); margin: -12px -16px 8px; text-align: center; border-radius: 0; }
+    .day-strip { padding: 10px 12px; gap: 8px; }
     .stories-panel { padding: 14px 12px; }
     .upload-card { padding: 32px 20px; }
 }
