@@ -976,34 +976,6 @@ td.col-significance { text-align: right; font-variant-numeric: tabular-nums; }
 .trend-chart.has-selection .trend-bar { fill: #efb9a1; }
 .trend-chart.has-selection .trend-slot.is-selected .trend-bar { fill: var(--tr-orange); }
 .trend-chart.has-selection .trend-slot.is-selected .trend-hit { fill: rgba(214,64,0,0.07); }
-.trend-focus {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 8px;
-    padding: 6px 8px 6px 12px;
-    font-size: 12px;
-    color: var(--tr-text);
-    background: #fff5f0;
-    border: 1px solid rgba(214,64,0,0.25);
-    border-radius: 2px;
-}
-.trend-focus strong { color: var(--tr-orange); }
-.trend-focus-clear {
-    font-family: 'Knowledge', 'Clario', sans-serif;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--tr-racing-green);
-    background: #fff;
-    border: 1px solid var(--tr-border);
-    border-radius: 2px;
-    padding: 3px 9px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: border-color 0.15s;
-}
-.trend-focus-clear:hover { border-color: var(--tr-racing-green); }
 /* While a bar is focused, the whole-period cards (Reach, Longevity) step back. */
 .stats-grid.is-focused .stat-card.is-period, .sig-strip.is-period { opacity: 0.5; }
 

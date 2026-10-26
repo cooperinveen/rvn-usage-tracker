@@ -1025,20 +1025,10 @@ function trendBinLabel(bin, inSentence = false) {
     return inSentence ? `on ${dow} ${date}` : `${dow} ${date}`;
 }
 
-function trendFocusTag(bin) {
-    if (bin == null) return '';
-    return `
-        <div class="trend-focus">
-            <span>Showing airings ${state.trendUnit === 'hour' ? 'at' : 'on'} <strong>${escHtml(trendBinLabel(bin))}</strong></span>
-            <button type="button" class="trend-focus-clear" data-trend-clear>All ${state.trendUnit === 'hour' ? 'hours' : 'days'} <span aria-hidden="true">✕</span></button>
-        </div>`;
-}
-
 // What a click inside a window means for its focused bar: undefined = not a
-// trend click; null = clear; a number = focus that bar (clicking the focused
-// bar again clears it).
+// trend click; a number = focus that bar; null = the focused bar was clicked
+// again, so clear it (same toggle as the pie).
 function trendBinFromEvent(e, current) {
-    if (e.target.closest('[data-trend-clear]')) return null;
     const slot = e.target.closest('.trend-slot[data-bin]');
     if (!slot) return undefined;
     const bin = Number(slot.dataset.bin);
@@ -1175,7 +1165,6 @@ function renderModalBody(s) {
                 </div>
                 ${trendChart ? `
                 <div class="modal-overview-chart">
-                    ${trendFocusTag(bin)}
                     <div class="trend-chart-wrap">${trendChart}</div>
                     ${miniPanel}
                 </div>` : `
@@ -1726,7 +1715,6 @@ function renderChannelModalBody(c) {
                 </div>
                 ${trendChart ? `
                 <div class="modal-overview-chart">
-                    ${trendFocusTag(bin)}
                     <div class="trend-chart-wrap">${trendChart}</div>
                 </div>` : state.selectedDay ? `
                 <div class="modal-overview-chart">
@@ -2361,7 +2349,7 @@ const HELP_SECTIONS = [
         { title: 'Exclude US channels', keys: 'usa toggle ex-us international',
           body: ['Removes US-based channels and their airings from every figure, including the summary download. Switching it clears your search and region filter.'] },
         { title: 'Clicking a trend bar', keys: 'chart bar day hour focus filter aired that day single story channel window',
-          body: ['In a story or channel window, click a bar in the airings chart to see just the airings in that bar — the numbers, channel or story list and pie all switch to that day (or hour). Click the bar again, or “All days”, to go back.',
+          body: ['In a story or channel window, click a bar in the airings chart to see just the airings in that bar — the numbers, channel or story list and pie all switch to that day (or hour). Click the bar again to go back.',
                  'This is about when the story aired, not when it was published — for that, use the publish days under the banner. Reach, Longevity and Significance always describe the whole period, so they fade while a bar is picked.'] },
         { title: 'Story window', keys: 'modal details on this day family',
           body: ['Click a story for its full channel list. “On this day” shows how that day’s airings split across slug families (IRAN-CRISIS, USA-TARIFFS…) for stories published the same day — this story’s family is outlined.'] },
