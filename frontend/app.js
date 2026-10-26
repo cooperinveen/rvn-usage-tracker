@@ -576,11 +576,6 @@ function deriveDayChannels(channels, keys) {
         }
         let simpson = 0;
         for (const v of mix.values()) simpson += (v / airings) ** 2;
-        let mixSorted = [...mix].sort((a, b) => b[1] - a[1]);
-        if (mixSorted.length > 8) {
-            const other = mixSorted.slice(8).reduce((n, [, v]) => n + v, 0);
-            mixSorted = [...mixSorted.slice(0, 8), ['Other', other]];
-        }
         out.push({
             ...c,
             airings,
@@ -590,7 +585,7 @@ function deriveDayChannels(channels, keys) {
             avg_clip_secs: Math.floor(secs / airings),
             avg_clip: secondsToHms(secs / airings),
             all_stories: rows,
-            story_country_mix: mixSorted.map(([country, a]) => ({ country, airings: a })),
+            story_country_mix: originMix(rows),
             trend: [],              // per-channel airing times aren't in the payload
             first_seen: '',
             last_seen: '',
@@ -616,6 +611,19 @@ function deriveDayChannels(channels, keys) {
 function roundHalfEven(x) {
     const r = Math.round(x);
     return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
+// Story-origin country mix for a channel's story rows, airings-weighted: top 8
+// plus Other, as the backend builds story_country_mix.
+function originMix(rows) {
+    const mix = new Map();
+    for (const r of rows) mix.set(r.origin_country, (mix.get(r.origin_country) || 0) + r.airings);
+    let sorted = [...mix].sort((a, b) => b[1] - a[1]);
+    if (sorted.length > 8) {
+        const other = sorted.slice(8).reduce((n, [, v]) => n + v, 0);
+        sorted = [...sorted.slice(0, 8), ['Other', other]];
+    }
+    return sorted.map(([country, airings]) => ({ country, airings }));
 }
 
 // Port of backend _percentile_ranks: 0–100, ties share their average rank.
@@ -997,6 +1005,102 @@ $('btn-next').addEventListener('click', () => {
     }
 });
 
+// ── Trend-bar focus (story + channel windows) ────────────────────────────────
+// Clicking a bar in a window's trend chart narrows that window to the airings
+// inside the bar. Uses the per-bin breakdown the backend attaches to each
+// story's channel and country rows: `bins: [[bin, airings, secs], ...]`.
+
+// Bar label: 'Tue 14 Oct' / '14:00–15:00 UTC'; `inSentence` adds the
+// preposition for running text ('on Tue 14 Oct' / 'at 14:00–15:00 UTC').
+function trendBinLabel(bin, inSentence = false) {
+    const start = parseRangeStamp(state.dateRange?.from);
+    if (start == null) return state.trendLabels?.[bin] || '';
+    if (state.trendUnit === 'hour') {
+        const from = new Date(Math.floor(start / 3600000) * 3600000 + bin * 3600000);
+        const hh = d => String(d.getUTCHours()).padStart(2, '0') + ':00';
+        const label = `${hh(from)}–${hh(new Date(from.getTime() + 3600000))} UTC`;
+        return inSentence ? `at ${label}` : label;
+    }
+    const [dow, date] = dayParts(msToYmd(Math.floor(start / DAY_MS) * DAY_MS + bin * DAY_MS));
+    return inSentence ? `on ${dow} ${date}` : `${dow} ${date}`;
+}
+
+function trendFocusTag(bin) {
+    if (bin == null) return '';
+    return `
+        <div class="trend-focus">
+            <span>Showing airings ${state.trendUnit === 'hour' ? 'at' : 'on'} <strong>${escHtml(trendBinLabel(bin))}</strong></span>
+            <button type="button" class="trend-focus-clear" data-trend-clear>All ${state.trendUnit === 'hour' ? 'hours' : 'days'} <span aria-hidden="true">✕</span></button>
+        </div>`;
+}
+
+// What a click inside a window means for its focused bar: undefined = not a
+// trend click; null = clear; a number = focus that bar (clicking the focused
+// bar again clears it).
+function trendBinFromEvent(e, current) {
+    if (e.target.closest('[data-trend-clear]')) return null;
+    const slot = e.target.closest('.trend-slot[data-bin]');
+    if (!slot) return undefined;
+    const bin = Number(slot.dataset.bin);
+    return bin === current ? null : bin;
+}
+
+// Story figures for one bar: the channels and countries that aired it then.
+function storyBinView(s, bin) {
+    const chans = [];
+    let airings = 0, secs = 0;
+    for (const c of s.all_channels || []) {
+        const hit = (c.bins || []).find(x => x[0] === bin);
+        if (!hit) continue;
+        chans.push({ channel: c.channel, country: c.country, airings: hit[1], air_time: secondsToHms(hit[2]) });
+        airings += hit[1];
+        secs += hit[2];
+    }
+    const markets = (s.all_markets || [])
+        .map(m => ({ market: m.market, airings: ((m.bins || []).find(x => x[0] === bin) || [0, 0])[1] }))
+        .filter(m => m.airings > 0);
+    const byAirings = (a, b) => b.airings - a.airings;
+    return {
+        airings,
+        channels: chans.length,
+        countries: markets.length,
+        total_air_time: secondsToHms(secs),
+        avg_clip: airings ? secondsToHms(secs / airings) : '0s',
+        all_channels: chans.sort(byAirings),
+        all_markets: markets.sort(byAirings),
+    };
+}
+
+// A channel's story rows for one bar, read off each story's own breakdown for
+// this channel. Index of the live stories is cached per dataset array.
+const storyIndexCache = new WeakMap();
+function storyByKey(key) {
+    let idx = storyIndexCache.get(state.allStories);
+    if (!idx) {
+        idx = new Map(state.allStories.map(s => [storyKey(s), s]));
+        storyIndexCache.set(state.allStories, idx);
+    }
+    return idx.get(key);
+}
+function channelBinRows(c, bin) {
+    const rows = [];
+    for (const r of c.all_stories || []) {
+        const story = storyByKey(r.story_id || r.slug);
+        const ch = story?.all_channels?.find(x => x.channel === c.channel);
+        const hit = (ch?.bins || []).find(x => x[0] === bin);
+        if (!hit) continue;
+        rows.push({ ...r, airings: hit[1], air_secs: hit[2], air_time: secondsToHms(hit[2]) });
+    }
+    return rows.sort((a, b) => b.airings - a.airings);
+}
+
+// Enter/Space on a focused bar acts like a click (SVG <g> has no .click()).
+[modalBody, $('ch-modal-body')].forEach(el => el.addEventListener('keydown', e => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.closest?.('.trend-slot')) return;
+    e.preventDefault();
+    e.target.closest('.trend-slot').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}));
+
 // ── Story Detail Modal ────────────────────────────────────────────────────────
 function openStoryModal(id) {
     // Identity is Story ID (slugs repeat across editions). Fall back to slug match
@@ -1011,20 +1115,27 @@ function openStoryModal(id) {
     modalAssetLength.textContent = story.asset_secs > 0 ? story.asset_length : '';
     storyModal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
+    state.modalStory = story;
+    state.modalBin = null;
     renderModalBody(story);
 }
 
 function renderModalBody(s) {
-    const trendChart = renderTrendChart(s.trend, state.trendLabels, state.trendUnit);
+    const bin = state.modalBin;
+    // v = the figures on show: the whole period, or just the focused trend bar.
+    // Reach, longevity and "On this day" always describe the whole story.
+    const v = bin == null ? s : storyBinView(s, bin);
+    const trendChart = renderTrendChart(s.trend, state.trendLabels, state.trendUnit, { clickable: true, selected: bin });
+    const periodTip = bin == null ? '' : ' title="Whole period — not affected by the selected bar"';
 
     // Mini-panel: top channel, top country, avg clip
-    const topCh = s.all_channels?.[0];
-    const topCtry = s.all_markets?.[0];
+    const topCh = v.all_channels?.[0];
+    const topCtry = v.all_markets?.[0];
     const miniPanel = `
         <ul class="modal-mini-panel">
             ${topCh ? `<li><span class="mini-label">Most aired on</span><span class="mini-value">${escHtml(topCh.channel)} <span class="mini-sub">(${topCh.airings.toLocaleString()} airings)</span></span></li>` : ''}
             ${topCtry ? `<li><span class="mini-label">Most aired in</span><span class="mini-value">${escHtml(topCtry.market)} <span class="mini-sub">(${topCtry.airings.toLocaleString()} airings)</span></span></li>` : ''}
-            <li><span class="mini-label">Avg clip used</span><span class="mini-value">${escHtml(s.avg_clip)}</span></li>
+            <li><span class="mini-label">Avg clip used</span><span class="mini-value">${escHtml(v.avg_clip)}</span></li>
         </ul>
     `;
 
@@ -1035,28 +1146,28 @@ function renderModalBody(s) {
         <div class="modal-section">
             <div class="modal-overview">
                 <div class="modal-overview-stats">
-                    <div class="stats-grid stats-grid-compact">
+                    <div class="stats-grid stats-grid-compact${bin == null ? '' : ' is-focused'}">
                         <div class="stat-card">
-                            <span class="stat-card-value">${s.airings.toLocaleString()}</span>
+                            <span class="stat-card-value">${v.airings.toLocaleString()}</span>
                             <span class="stat-card-label">Airings</span>
                         </div>
                         <div class="stat-card">
-                            <span class="stat-card-value">${s.channels}</span>
+                            <span class="stat-card-value">${v.channels}</span>
                             <span class="stat-card-label">Channels</span>
                         </div>
                         <div class="stat-card">
-                            <span class="stat-card-value">${s.countries}</span>
+                            <span class="stat-card-value">${v.countries}</span>
                             <span class="stat-card-label">Countries</span>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card is-period"${periodTip}>
                             <span class="stat-card-value">${reachDisplay(s.reach, true)}</span>
                             <span class="stat-card-label">Reach</span>
                         </div>
                         <div class="stat-card">
-                            <span class="stat-card-value">${escHtml(s.total_air_time)}</span>
+                            <span class="stat-card-value">${escHtml(v.total_air_time)}</span>
                             <span class="stat-card-label">Total air time</span>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card is-period"${periodTip}>
                             <span class="stat-card-value">${longevityDisplay(s.longevity, true)}</span>
                             <span class="stat-card-label">Longevity</span>
                         </div>
@@ -1064,6 +1175,7 @@ function renderModalBody(s) {
                 </div>
                 ${trendChart ? `
                 <div class="modal-overview-chart">
+                    ${trendFocusTag(bin)}
                     <div class="trend-chart-wrap">${trendChart}</div>
                     ${miniPanel}
                 </div>` : `
@@ -1086,7 +1198,7 @@ function renderModalBody(s) {
     `;
 
     // Wire the paginated channel table
-    state.modalChannels = s.all_channels;
+    state.modalChannels = v.all_channels;
     state.modalChannelPage = 1;
     renderModalChannelPage();
 }
@@ -1254,8 +1366,15 @@ $('channels-tbody').addEventListener('keydown', e => {
     if (row) openChannelModal(row.dataset.channel);
 });
 
-// Modal table pagination — delegated so it survives re-renders
+// Trend bars + modal table pagination — delegated so they survive re-renders
 modalBody.addEventListener('click', e => {
+    const bin = trendBinFromEvent(e, state.modalBin);
+    if (bin !== undefined) {
+        state.modalBin = bin;
+        renderModalBody(state.modalStory);
+        modalBody.querySelector('.trend-slot.is-selected')?.focus();
+        return;
+    }
     const btn = e.target.closest('[data-page-action]');
     if (!btn) return;
     if (btn.dataset.pageKind !== 'channel') return;
@@ -1292,19 +1411,9 @@ function openChannelModal(channelName) {
     if (!c) return;
     chModalName.textContent = c.channel;
     chModalCountry.textContent = c.country || '';
-    // Promoted from the body — sits right-aligned next to the country label.
-    // innerHTML is safe here: all interpolated values are server-cast ints or
-    // the _seconds_to_hms string (no user-controlled content).
-    const daysWord = c.days_active === 1 ? 'day' : 'days';
-    const span = state.selectedDay
-        ? `published ${escHtml(dayLongLabel(state.selectedDay))}`
-        : `over <strong>${c.days_active}</strong> ${daysWord}`;
-    chModalSummary.innerHTML = `
-        <strong>${c.airings.toLocaleString()}</strong> airings of
-        <strong>${c.stories.toLocaleString()}</strong> stories ${span}
-        (<strong>${escHtml(c.total_air_time)}</strong> total air time)
-    `;
     // Each modal open starts with a clean slate — no filter leakage between channels
+    state.chModalChannel = c;
+    state.chModalBin = null;
     state.chModalRegion = 'all';
     state.chModalCountry = null;
     state.chModalStoryPage = 1;
@@ -1511,7 +1620,8 @@ $('story-modal-download').addEventListener('click', async () => {
         const dataUrl = canvas.toDataURL('image/png');
         const a = document.createElement('a');
         a.href = dataUrl;
-        a.download = `${slugifyForFilename(modalSlug.textContent)}.png`;
+        const binPart = state.modalBin == null ? '' : `-${slugifyForFilename(trendBinLabel(state.modalBin))}`;
+        a.download = `${slugifyForFilename(modalSlug.textContent)}${binPart}.png`;
         a.click();
         showToast('Image downloaded.');
     } catch (err) {
@@ -1543,6 +1653,7 @@ function filterSuffix() {
         parts.push(slugifyForFilename(state.chModalRegion));
     }
     if (state.chModalCountry) parts.push(slugifyForFilename(state.chModalCountry));
+    if (state.chModalBin != null) parts.push(slugifyForFilename(trendBinLabel(state.chModalBin)));
     return parts.length ? '-' + parts.join('-') : '';
 }
 
@@ -1574,9 +1685,37 @@ function renderSignificanceStrip(c) {
         </div>`;
 }
 
+// Header line beside the country label. innerHTML is safe here: all
+// interpolated values are server-cast ints, hms strings or our own labels.
+function renderChannelSummary(c, rows) {
+    const bin = state.chModalBin;
+    let airings = c.airings, stories = c.stories, airTime = c.total_air_time, span;
+    if (bin != null) {
+        airings = rows.reduce((n, r) => n + r.airings, 0);
+        stories = rows.length;
+        airTime = secondsToHms(rows.reduce((n, r) => n + r.air_secs, 0));
+        span = escHtml(trendBinLabel(bin, true));
+    } else if (state.selectedDay) {
+        span = `published ${escHtml(dayLongLabel(state.selectedDay))}`;
+    } else {
+        span = `over <strong>${c.days_active}</strong> ${c.days_active === 1 ? 'day' : 'days'}`;
+    }
+    chModalSummary.innerHTML = `
+        <strong>${airings.toLocaleString()}</strong> airings of
+        <strong>${stories.toLocaleString()}</strong> stories ${span}
+        (<strong>${escHtml(airTime)}</strong> total air time)
+    `;
+}
+
 function renderChannelModalBody(c) {
-    const trendChart = renderTrendChart(c.trend, state.trendLabels, state.trendUnit);
-    const pie = renderCountryPie(c.story_country_mix);
+    const bin = state.chModalBin;
+    // Story rows on show: the whole period, or just the focused trend bar's airings.
+    const rows = bin == null ? (c.all_stories || []) : channelBinRows(c, bin);
+    const mix = bin == null ? c.story_country_mix : originMix(rows);
+    if (state.chModalCountry && !mix.some(m => m.country === state.chModalCountry)) state.chModalCountry = null;
+    renderChannelSummary(c, rows);
+    const trendChart = renderTrendChart(c.trend, state.trendLabels, state.trendUnit, { clickable: true, selected: bin });
+    const pie = renderCountryPie(mix);
 
     chModalBody.innerHTML = `
         ${renderSignificanceStrip(c)}
@@ -1587,6 +1726,7 @@ function renderChannelModalBody(c) {
                 </div>
                 ${trendChart ? `
                 <div class="modal-overview-chart">
+                    ${trendFocusTag(bin)}
                     <div class="trend-chart-wrap">${trendChart}</div>
                 </div>` : state.selectedDay ? `
                 <div class="modal-overview-chart">
@@ -1618,7 +1758,12 @@ function renderChannelModalBody(c) {
         </div>
     `;
 
-    state.chModalAllStories = c.all_stories || [];
+    const sig = chModalBody.querySelector('.sig-strip');
+    if (sig && bin != null) {
+        sig.classList.add('is-period');
+        sig.title = 'Whole period — not affected by the selected bar';
+    }
+    state.chModalAllStories = rows;
     applyChannelModalFilters();
 }
 
@@ -1782,6 +1927,15 @@ function renderChannelModalStoryPage() {
 // Delegated handler for the channel-modal body — survives re-renders. Handles
 // pagination, region pills, pie/legend country selection, and chip clears.
 chModalBody.addEventListener('click', e => {
+    // 0. Trend bar → focus that bar's airings (click again or the tag to clear)
+    const bin = trendBinFromEvent(e, state.chModalBin);
+    if (bin !== undefined) {
+        state.chModalBin = bin;
+        renderChannelModalBody(state.chModalChannel);
+        chModalBody.querySelector('.trend-slot.is-selected')?.focus();
+        return;
+    }
+
     // 1. Region pill → set region filter
     const pill = e.target.closest('.ch-modal-region-pills .filter-pill[data-ch-region]');
     if (pill) {
@@ -2206,6 +2360,9 @@ const HELP_SECTIONS = [
           body: ['On Stories, searches slugs and headlines. On Channels, searches channel names and countries.'] },
         { title: 'Exclude US channels', keys: 'usa toggle ex-us international',
           body: ['Removes US-based channels and their airings from every figure, including the summary download. Switching it clears your search and region filter.'] },
+        { title: 'Clicking a trend bar', keys: 'chart bar day hour focus filter aired that day single story channel window',
+          body: ['In a story or channel window, click a bar in the airings chart to see just the airings in that bar — the numbers, channel or story list and pie all switch to that day (or hour). Click the bar again, or “All days”, to go back.',
+                 'This is about when the story aired, not when it was published — for that, use the publish days under the banner. Reach, Longevity and Significance always describe the whole period, so they fade while a bar is picked.'] },
         { title: 'Story window', keys: 'modal details on this day family',
           body: ['Click a story for its full channel list. “On this day” shows how that day’s airings split across slug families (IRAN-CRISIS, USA-TARIFFS…) for stories published the same day — this story’s family is outlined.'] },
         { title: 'Channel window', keys: 'modal pie chart origin country click',
@@ -2380,8 +2537,12 @@ function reachDisplay(score, plain) {
     return `<span class="significance ${cls} ${variant}" title="Breadth of pickup — distinct channels and countries, percentile-ranked (0–100, relative to this dataset)">${score}</span>`;
 }
 
-function renderTrendChart(counts, labels, unit) {
+// opts.clickable: each bar with airings gets a full-height hit area carrying
+// data-bin, so the story/channel windows can narrow to that bar's airings.
+// opts.selected: bin index currently focused (others fade, like the pie).
+function renderTrendChart(counts, labels, unit, opts = {}) {
     if (!counts || counts.length === 0) return '';
+    const { clickable = false, selected = null } = opts;
     const w = 480, h = 150;
     const padL = 28, padR = 6, padT = 14, padB = 26;
     const chartW = w - padL - padR;
@@ -2406,10 +2567,21 @@ function renderTrendChart(counts, labels, unit) {
         const x = padL + i * slot + (slot - barW) / 2;
         const y = baselineY - barH;
         const label = labels?.[i] ? `${labels[i]}: ${c} airing${c === 1 ? '' : 's'}` : `${c} airing${c === 1 ? '' : 's'}`;
-        return `
+        if (!clickable || c === 0) {
+            return `
             <rect class="trend-bar" x="${x.toFixed(2)}" y="${y}" width="${barW.toFixed(2)}" height="${barH}">
                 <title>${escHtml(label)}</title>
             </rect>
+        `;
+        }
+        const on = selected === i;
+        const tip = on ? `${label} — click again to show every ${unit}` : `${label} — click to see just this ${unit}`;
+        return `
+            <g class="trend-slot${on ? ' is-selected' : ''}" data-bin="${i}" role="button" tabindex="0" aria-pressed="${on}">
+                <title>${escHtml(tip)}</title>
+                <rect class="trend-hit" x="${(padL + i * slot).toFixed(2)}" y="${padT - 4}" width="${slot.toFixed(2)}" height="${chartH + 4}"></rect>
+                <rect class="trend-bar" x="${x.toFixed(2)}" y="${y}" width="${barW.toFixed(2)}" height="${barH}"></rect>
+            </g>
         `;
     }).join('');
 
@@ -2421,7 +2593,8 @@ function renderTrendChart(counts, labels, unit) {
         return `<text x="${x.toFixed(2)}" y="${h - 8}" text-anchor="middle" font-size="10" fill="var(--tr-text-light)">${escHtml(lbl)}</text>`;
     }).join('');
 
-    return `<svg class="trend-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" aria-label="Airings per ${unit}">
+    const cls = ['trend-chart', clickable ? 'is-clickable' : '', selected != null ? 'has-selection' : ''].filter(Boolean).join(' ');
+    return `<svg class="${cls}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" aria-label="Airings per ${unit}">
         ${axis}
         ${bars}
         ${xLabels}

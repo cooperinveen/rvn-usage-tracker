@@ -323,6 +323,20 @@ def parse_file(file_bytes, filename):
             trend_edges = pd.date_range(valid_dates.min().floor('D'), periods=n_bins + 1, freq='D', tz='UTC')
         trend_labels = [e.strftime('%d %b' if trend_unit == 'day' else '%H:%M') for e in trend_edges[:-1]]
 
+    # Trend bucket per airing: index into the shared bins, -1 when outside the
+    # axis or undated. Same bucketing as the histograms below (last bin closed
+    # on the right), so a story's per-channel bins add up to its trend bars.
+    # Lets the story/channel windows narrow to the airings of one bar.
+    df['_bin'] = -1
+    if len(trend_edges):
+        edge_ns = trend_edges.astype('int64').to_numpy()
+        dated = df['_utc_start'].notna()
+        ts_ns = df.loc[dated, '_utc_start'].astype('int64').to_numpy()
+        idx = _np.searchsorted(edge_ns, ts_ns, side='right') - 1
+        idx[ts_ns == edge_ns[-1]] = len(edge_ns) - 2
+        idx[(ts_ns < edge_ns[0]) | (ts_ns > edge_ns[-1])] = -1
+        df.loc[dated, '_bin'] = idx
+
     # Channel → home country lookup, computed once and reused everywhere a
     # channel needs to be labelled. Mode of non-empty Channel: Region Name,
     # "Unknown" when truly missing. Avoids the row-order-dependent garbage
@@ -507,6 +521,19 @@ def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,
     trend axis / dataset window / channel-country map are passed in so both
     passes share an identical, comparable basis.
     """
+    # Per story × channel (and × country) airings in each trend bin, as sparse
+    # [bin, airings, secs] / [bin, airings] lists. Built in one pass up front so
+    # the per-story loop just looks them up.
+    binned = df[df['_bin'] >= 0]
+    ch_bins = defaultdict(list)
+    for (key, chan, b), n, secs in binned.groupby(['_story_key', '_channel', '_bin'])['_actual_secs'] \
+            .agg(['count', 'sum']).itertuples(name=None):
+        ch_bins[(key, chan)].append([int(b), int(n), int(secs)])
+    mkt_bins = defaultdict(list)
+    for (key, ctry, b), n in binned.groupby(['_story_key', '_country', '_bin'])['_actual_secs'] \
+            .count().items():
+        mkt_bins[(key, ctry)].append([int(b), int(n)])
+
     # --- Aggregate per story ---
     stories = []
     grouped = df.groupby('_story_key', sort=False)
@@ -541,12 +568,15 @@ def _aggregate(df, *, trend_edges, trend_labels, trend_unit, dataset_end,
             c['country'] = channel_country_map.get(c['channel'], 'Unknown')
             c['air_time'] = _seconds_to_hms(c['air_secs'])
             del c['air_secs']
+            c['bins'] = ch_bins.get((_story_key, c['channel']), [])
 
         # All countries for this story (kept under all_markets for legacy compatibility)
         ctry_counts = grp.groupby('_country')['_actual_secs'].count().reset_index()
         ctry_counts.columns = ['market', 'airings']
         ctry_counts = ctry_counts.sort_values('airings', ascending=False)
         all_markets = ctry_counts.to_dict('records')
+        for m in all_markets:
+            m['bins'] = mkt_bins.get((_story_key, m['market']), [])
 
         # Regions derived from the story slug (not broadcast location); can be multiple
         regions = {r: 1 for r in _region_from_slug(slug)}
